@@ -1,0 +1,167 @@
+version: "3.9"
+
+services:
+  # ===========================================
+  # PostgreSQL + PostGIS Database
+  # ===========================================
+  db:
+    image: postgis/postgis:15-3.3-alpine
+    container_name: pwst-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pwst}
+      POSTGRES_USER: ${POSTGRES_USER:-pwst}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pwst_local_dev}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pwst} -d ${POSTGRES_DB:-pwst}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================
+  # Redis (Task Queue & Cache)
+  # ===========================================
+  redis:
+    image: redis:7-alpine
+    container_name: pwst-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===========================================
+  # FastAPI Backend
+  # ===========================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    container_name: pwst-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=db
+      - REDIS_HOST=redis
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: >
+      uvicorn src.api.main:app 
+      --host 0.0.0.0 
+      --port 8000 
+      --reload
+
+  # ===========================================
+  # Streamlit Frontend
+  # ===========================================
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ui
+    container_name: pwst-ui
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - API_URL=http://api:8000
+      - POSTGRES_HOST=db
+      - REDIS_HOST=redis
+    ports:
+      - "${STREAMLIT_PORT:-8501}:8501"
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      - api
+    command: >
+      streamlit run src/ui/app.py
+      --server.port=8501
+      --server.address=0.0.0.0
+      --server.headless=true
+      --theme.base=dark
+      --theme.primaryColor="#58A6FF"
+      --theme.backgroundColor="#0D1117"
+      --theme.secondaryBackgroundColor="#161B22"
+      --theme.textColor="#E6EDF3"
+
+  # ===========================================
+  # Celery Worker (Data Ingestion)
+  # ===========================================
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    container_name: pwst-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=db
+      - REDIS_HOST=redis
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A src.ingestion.scheduler worker
+      --loglevel=info
+      --concurrency=2
+
+  # ===========================================
+  # Celery Beat (Scheduler)
+  # ===========================================
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    container_name: pwst-scheduler
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=db
+      - REDIS_HOST=redis
+    volumes:
+      - ./src:/app/src:ro
+    depends_on:
+      - worker
+    command: >
+      celery -A src.ingestion.scheduler beat
+      --loglevel=info
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  default:
+    name: pwst-network

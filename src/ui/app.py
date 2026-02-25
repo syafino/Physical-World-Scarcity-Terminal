@@ -318,10 +318,19 @@ def create_map(data: Optional[list[dict]], anomaly_ids: Optional[set] = None) ->
         bearing=0,
     )
 
+    # Use Carto dark basemap (free, no API key required) if no Mapbox token
+    if MAPBOX_TOKEN:
+        map_style = MAPBOX_STYLE
+        api_keys = {"mapbox": MAPBOX_TOKEN}
+    else:
+        map_style = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json"
+        api_keys = None
+    
     deck = pdk.Deck(
         layers=layers,
         initial_view_state=view_state,
-        map_style=MAPBOX_STYLE if MAPBOX_TOKEN else "mapbox://styles/mapbox/dark-v11",
+        map_style=map_style,
+        api_keys=api_keys,
         tooltip={
             "text": "{station_name}\nValue: {value}\nObserved: {observed_at}",
             "style": {
@@ -456,13 +465,14 @@ def render_grid_data(data: list[dict]):
             solar = latest.get("grid_solar", "N/A")
             st.metric("SOLAR", f"{solar:,.0f} MW" if isinstance(solar, (int, float)) else solar)
 
-    # Time series chart
+    # Time series chart (exclude summary row)
     if "observed_at" in df.columns and "grid_demand" in df.columns:
-        df["observed_at"] = pd.to_datetime(df["observed_at"])
-        df = df.sort_values("observed_at")
+        chart_df = df[df.get("is_summary", False) != True].copy() if "is_summary" in df.columns else df.copy()
+        chart_df["observed_at"] = pd.to_datetime(chart_df["observed_at"])
+        chart_df = chart_df.sort_values("observed_at")
 
         st.line_chart(
-            df.set_index("observed_at")[["grid_demand", "grid_generation"]].dropna(),
+            chart_df.set_index("observed_at")[["grid_demand", "grid_generation"]].dropna(),
             use_container_width=True,
             height=200,
         )

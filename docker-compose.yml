@@ -1,11 +1,10 @@
-version: "3.9"
-
 services:
   # ===========================================
   # PostgreSQL + PostGIS Database
   # ===========================================
   db:
     image: postgis/postgis:15-3.3-alpine
+    platform: linux/amd64
     container_name: pwst-db
     restart: unless-stopped
     environment:
@@ -131,7 +130,7 @@ services:
       redis:
         condition: service_healthy
     command: >
-      celery -A src.ingestion.scheduler worker
+      celery -A src.scheduler worker
       --loglevel=info
       --concurrency=2
 
@@ -155,7 +154,7 @@ services:
     depends_on:
       - worker
     command: >
-      celery -A src.ingestion.scheduler beat
+      celery -A src.scheduler beat
       --loglevel=info
 
 volumes:

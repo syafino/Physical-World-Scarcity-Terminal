@@ -182,7 +182,7 @@ class Observation(Base):
 
     __tablename__ = "observations"
 
-    observation_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    observation_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     indicator_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("indicators.indicator_id"), nullable=False
     )
@@ -221,7 +221,7 @@ class Anomaly(Base):
 
     __tablename__ = "anomalies"
 
-    anomaly_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    anomaly_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     indicator_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("indicators.indicator_id"), nullable=False
     )

@@ -325,6 +325,8 @@ def execute_watr(db: Session, region_code: str) -> tuple[list, list]:
 
 def execute_grid(db: Session, region_code: str) -> tuple[list, list]:
     """Execute GRID command - power grid data."""
+    from sqlalchemy import func as sqlfunc
+    
     # Get grid indicators
     indicator_codes = ["GRID_DEMAND", "GRID_GENERATION", "GRID_WIND", "GRID_SOLAR"]
     indicators = db.query(Indicator).filter(Indicator.code.in_(indicator_codes)).all()
@@ -333,6 +335,7 @@ def execute_grid(db: Session, region_code: str) -> tuple[list, list]:
         return [], []
 
     indicator_map = {i.indicator_id: i for i in indicators}
+    code_to_id = {i.code: i.indicator_id for i in indicators}
     indicator_ids = list(indicator_map.keys())
 
     # Get recent observations
@@ -358,7 +361,21 @@ def execute_grid(db: Session, region_code: str) -> tuple[list, list]:
         .all()
     )
 
-    # Format data - aggregate by time
+    # Get latest value for EACH indicator (they may have different timestamps)
+    latest_values = {}
+    for code in indicator_codes:
+        ind_id = code_to_id.get(code)
+        if ind_id:
+            latest_obs = (
+                db.query(Observation)
+                .filter(Observation.indicator_id == ind_id)
+                .order_by(Observation.observed_at.desc())
+                .first()
+            )
+            if latest_obs:
+                latest_values[code.lower()] = latest_obs.value
+
+    # Format data - aggregate by time for time series
     time_series: dict[str, dict] = {}
 
     for obs in observations:
@@ -372,7 +389,14 @@ def execute_grid(db: Session, region_code: str) -> tuple[list, list]:
 
         time_series[time_key][indicator.code.lower()] = obs.value
 
+    # Build data list with a "latest" summary as the first record
     data = list(time_series.values())
+    
+    # Insert summary record at the beginning with all latest values
+    if latest_values:
+        summary = {"observed_at": datetime.now(timezone.utc).isoformat(), "is_summary": True}
+        summary.update(latest_values)
+        data.insert(0, summary)
 
     anomalies = [
         {

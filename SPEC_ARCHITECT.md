@@ -352,6 +352,24 @@ RISK US-CA <GO>              # Full risk dashboard for region
 | Text | `#E6EDF3` | Primary text |
 | Accent | `#58A6FF` | Links, selections |
 
+### 5.4.1 Ticker Tray (Phase 2)
+
+**Position:** Fixed at bottom of viewport, 40px height
+**Background:** `#0D1117` with top border `#30363D`
+**Content:** Horizontally scrolling alert feed from Anomaly Engine
+
+**Display Format:**
+```
+[CRITICAL] GRID_STRAIN: ERCOT MARGIN 4.2% ║ [WARNING] PORT_CONGESTION: 18 VESSELS WAITING ║ [NORMAL] AQUIFER: LEVELS STABLE
+```
+
+**Behavior:**
+- Auto-scroll left at 50px/second
+- Pause on hover
+- Click alert to jump to relevant function
+- Color-coded by severity level
+- Updates every 30 seconds from `/api/alerts` endpoint
+
 ### 5.5 Streamlit Component Structure
 
 ```
@@ -390,7 +408,62 @@ streamlit_app/
 3. **Change Point Detection** — PELT algorithm for structural breaks
 4. **Spatial Clustering** — DBSCAN to identify regional anomaly clusters
 
-### 6.2 Correlation Engine
+### 6.2 Threshold-Based Alert System (Phase 2)
+
+**Alert Severity Levels:**
+| Level | Code | Color | Meaning |
+|-------|------|-------|---------|
+| 0 | NORMAL | `#00FF00` | Within expected parameters |
+| 1 | WATCH | `#FFFF00` | Approaching threshold |
+| 2 | WARNING | `#FFA500` | Threshold breached |
+| 3 | CRITICAL | `#FF0000` | Multiple thresholds / cascading risk |
+
+**GRID Alert Thresholds (ERCOT):**
+| Condition | Level | Alert Code |
+|-----------|-------|------------|
+| Reserve Margin > 10% | NORMAL | - |
+| Reserve Margin 5-10% | WATCH | `GRID_MARGIN_LOW` |
+| Reserve Margin < 5% | WARNING | `GRID_STRAIN` |
+| Reserve Margin < 3% OR Demand > 95% Capacity | CRITICAL | `GRID_EMERGENCY` |
+
+**WATR Alert Thresholds (Texas Aquifers):**
+| Condition | Level | Alert Code |
+|-----------|-------|------------|
+| Level within 1σ of 30-day mean | NORMAL | - |
+| Level 1-2σ below mean | WATCH | `AQUIFER_DECLINING` |
+| Level > 2σ below mean | WARNING | `DROUGHT_RISK` |
+| Level > 3σ below mean OR rate of decline > 0.5m/week | CRITICAL | `AQUIFER_CRITICAL` |
+
+**FLOW Alert Thresholds (Port of Houston):**
+| Condition | Level | Alert Code |
+|-----------|-------|------------|
+| Vessels Waiting < 5 | NORMAL | - |
+| Vessels Waiting 5-15 | WATCH | `PORT_BUSY` |
+| Vessels Waiting 15-30 | WARNING | `PORT_CONGESTION` |
+| Vessels Waiting > 30 OR Dwell Time > 72h | CRITICAL | `PORT_GRIDLOCK` |
+
+### 6.3 Linked Fate Engine (Cascading Risk)
+
+**Multi-Signal Correlation Rules:**
+```
+RULE: TEXAS_SUPPLY_CHAIN_CRITICAL
+  IF (GRID_STRAIN OR GRID_EMERGENCY)
+  AND (PORT_CONGESTION OR PORT_GRIDLOCK)
+  THEN severity = MAX(grid_severity, port_severity) + 1
+  
+RULE: TEXAS_INFRASTRUCTURE_STRESS
+  IF (DROUGHT_RISK OR AQUIFER_CRITICAL)
+  AND (GRID_STRAIN OR GRID_EMERGENCY)
+  THEN severity = MAX(water_severity, grid_severity) + 1
+  
+RULE: PERFECT_STORM
+  IF (GRID severity >= WARNING)
+  AND (WATR severity >= WARNING)
+  AND (FLOW severity >= WARNING)
+  THEN severity = CRITICAL, alert = "TEXAS_PERFECT_STORM"
+```
+
+### 6.4 Correlation Engine
 
 **Hypothesis Testing:**
 - Null: Physical indicator X has no predictive relationship with economic indicator Y
@@ -500,6 +573,29 @@ Texas is the ideal "Ground Zero" for the MVP:
 |------|----------|-------------|-----------|
 | `GRID` | P0 | EIA API (ERCOT) | Fast-moving (5-min intervals), high dynamism |
 | `WATR` | P0 | USGS NWIS | Slow-moving, high-impact spatial data |
+| `FLOW` | P0 | Simulated AIS / Port Stats | Logistics chokepoint monitoring |
+
+### 9.2.1 FLOW Function Code (Phase 2)
+
+**Command:** `FLOW HOU <GO>` — Port of Houston / Gulf Coast logistics
+
+**Data Strategy:** Real-time AIS data requires expensive commercial APIs (MarineTraffic: $500+/mo, Spire: Enterprise only). For MVP, we use a **realistic simulation engine** based on:
+- Historical Port of Houston statistics (avg 250 vessels/day, 8,000 ships/year)
+- Temporal patterns (weekday peaks, seasonal variation)
+- Weather/hurricane season impacts
+- Random variation for realism
+
+**Indicators:**
+| Code | Name | Unit | Update Frequency |
+|------|------|------|------------------|
+| `PORT_VESSELS` | Vessels in Port | count | 15 min |
+| `PORT_WAITING` | Vessels at Anchor | count | 15 min |
+| `PORT_DWELL` | Avg Dwell Time | hours | 1 hour |
+| `PORT_THROUGHPUT` | Daily Throughput | TEU | 1 hour |
+
+**Future Migration:** When budget allows, replace simulation with:
+1. Spire AIS (via Snowflake Marketplace) — $15/mo academic tier
+2. MarineTraffic API — If free tier (100/day) proves sufficient for spot checks
 
 ### 9.3 Architecture Decisions
 

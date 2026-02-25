@@ -44,10 +44,22 @@ app.conf.beat_schedule = {
         "schedule": crontab(minute=15, hour="*/6"),  # Every 6 hours at :15
         "options": {"queue": "ingestion"},
     },
+    # Fetch Port of Houston data every 15 minutes
+    "fetch-port-data-15m": {
+        "task": "src.ingestion.scheduler.fetch_port_data",
+        "schedule": crontab(minute="*/15"),  # Every 15 minutes
+        "options": {"queue": "ingestion"},
+    },
     # Run anomaly detection hourly
     "detect-anomalies-hourly": {
         "task": "src.ingestion.scheduler.detect_anomalies",
         "schedule": crontab(minute=30),  # 30 minutes past every hour
+        "options": {"queue": "analysis"},
+    },
+    # Run risk engine evaluation every 5 minutes
+    "evaluate-risk-5m": {
+        "task": "src.ingestion.scheduler.evaluate_risk",
+        "schedule": crontab(minute="*/5"),  # Every 5 minutes
         "options": {"queue": "analysis"},
     },
 }
@@ -93,6 +105,23 @@ def fetch_usgs_water(self, days_back: int = 7):
         self.retry(exc=e, countdown=60, max_retries=3)
 
 
+@app.task(bind=True, name="src.ingestion.scheduler.fetch_port_data")
+def fetch_port_data(self):
+    """
+    Celery task to fetch/generate Port of Houston logistics data.
+    
+    Returns:
+        Dict with fetch summary
+    """
+    from src.ingestion.port import fetch_port_data as _fetch_port
+
+    try:
+        result = _fetch_port()
+        return result
+    except Exception as e:
+        self.retry(exc=e, countdown=60, max_retries=3)
+
+
 @app.task(bind=True, name="src.ingestion.scheduler.detect_anomalies")
 def detect_anomalies(self):
     """
@@ -108,6 +137,26 @@ def detect_anomalies(self):
         return result
     except Exception as e:
         self.retry(exc=e, countdown=60, max_retries=3)
+
+
+@app.task(bind=True, name="src.ingestion.scheduler.evaluate_risk")
+def evaluate_risk(self):
+    """
+    Celery task to run the Linked Fate risk engine.
+    
+    Evaluates current conditions across all data feeds and
+    generates/updates alerts based on threshold rules.
+    
+    Returns:
+        Dict with risk evaluation summary
+    """
+    from src.analysis.risk_engine import evaluate_all_risks
+
+    try:
+        result = evaluate_all_risks()
+        return result
+    except Exception as e:
+        self.retry(exc=e, countdown=30, max_retries=3)
 
 
 @app.task(name="src.ingestion.scheduler.health_check")

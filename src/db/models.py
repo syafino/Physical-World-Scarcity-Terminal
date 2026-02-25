@@ -319,3 +319,43 @@ class IngestionRun(Base):
         Index("idx_ingestion_source", source_id, started_at.desc()),
         Index("idx_ingestion_status", status),
     )
+
+
+class Alert(Base):
+    """Risk alerts from the Linked Fate engine."""
+
+    __tablename__ = "alerts"
+
+    alert_id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    alert_type: Mapped[str] = mapped_column(String(50), nullable=False)  # GRID, WATR, FLOW, LINKED
+    alert_level: Mapped[str] = mapped_column(String(20), nullable=False)  # NORMAL, WATCH, WARNING, CRITICAL
+    region_code: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    indicator_values: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    triggered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", JSONB, default=dict, nullable=False
+    )
+
+    __table_args__ = (
+        Index("idx_alerts_active", is_active, triggered_at.desc()),
+        Index("idx_alerts_level", alert_level),
+        Index("idx_alerts_type", alert_type),
+        Index("idx_alerts_region", region_code),
+        Index(
+            "idx_alerts_unacked",
+            is_acknowledged,
+            postgresql_where=(is_acknowledged == False),
+        ),
+    )

@@ -242,6 +242,21 @@ def execute_command(command: str) -> dict[str, Any]:
         }
 
 
+def fetch_alerts(active_only: bool = True, limit: int = 50) -> list[dict]:
+    """Fetch risk alerts from the API."""
+    try:
+        response = httpx.get(
+            f"{API_URL}/alerts",
+            params={"active_only": active_only, "limit": limit},
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        # Return empty list on error - don't break the UI
+        return []
+
+
 def check_api_health() -> bool:
     """Check if API is healthy."""
     try:
@@ -398,6 +413,8 @@ def render_data_panel(data: Optional[list[dict]], function_code: Optional[str]):
         render_water_data(data)
     elif function_code == "GRID":
         render_grid_data(data)
+    elif function_code == "FLOW":
+        render_flow_data(data)
     elif function_code == "RISK":
         render_risk_data(data)
     else:
@@ -478,6 +495,82 @@ def render_grid_data(data: list[dict]):
         )
 
 
+def render_flow_data(data: list[dict]):
+    """Render port/logistics data panel."""
+    st.markdown("### ▓ PORT OF HOUSTON STATUS")
+
+    if not data:
+        st.markdown("*No port data available*")
+        return
+
+    df = pd.DataFrame(data)
+    
+    # Get port summaries (records with port_name)
+    port_summaries = df[df.get("port_name", pd.Series([None]*len(df))).notna()].copy() if "port_name" in df.columns else pd.DataFrame()
+    
+    if not port_summaries.empty:
+        for _, port in port_summaries.iterrows():
+            port_name = port.get("port_name", "Unknown Port")
+            
+            st.markdown(f"**{port_name}**")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                vessels = port.get("port_vessels", "N/A")
+                st.metric(
+                    "VESSELS IN PORT", 
+                    f"{vessels:.0f}" if isinstance(vessels, (int, float)) else vessels
+                )
+            with col2:
+                waiting = port.get("port_waiting", "N/A")
+                # Color-code waiting vessels
+                if isinstance(waiting, (int, float)):
+                    if waiting > 30:
+                        delta_color = "inverse"  # Red
+                    elif waiting > 15:
+                        delta_color = "off"
+                    else:
+                        delta_color = "normal"
+                    st.metric(
+                        "VESSELS WAITING", 
+                        f"{waiting:.0f}",
+                        delta=f"{'CONGESTED' if waiting > 15 else 'NORMAL'}",
+                        delta_color=delta_color
+                    )
+                else:
+                    st.metric("VESSELS WAITING", waiting)
+
+            col3, col4 = st.columns(2)
+            with col3:
+                dwell = port.get("port_dwell", "N/A")
+                st.metric(
+                    "AVG DWELL TIME", 
+                    f"{dwell:.1f} hrs" if isinstance(dwell, (int, float)) else dwell
+                )
+            with col4:
+                throughput = port.get("port_throughput", "N/A")
+                st.metric(
+                    "THROUGHPUT", 
+                    f"{throughput:,.0f} TEU" if isinstance(throughput, (int, float)) else throughput
+                )
+            
+            st.markdown("---")
+    
+    # Time series chart for waiting vessels
+    time_series_df = df[df.get("port_name", pd.Series([None]*len(df))).isna()].copy() if "port_name" in df.columns else df.copy()
+    
+    if not time_series_df.empty and "observed_at" in time_series_df.columns and "port_waiting" in time_series_df.columns:
+        time_series_df["observed_at"] = pd.to_datetime(time_series_df["observed_at"])
+        time_series_df = time_series_df.sort_values("observed_at")
+        
+        st.markdown("**Vessels Waiting (24h)**")
+        st.line_chart(
+            time_series_df.set_index("observed_at")[["port_waiting"]].dropna(),
+            use_container_width=True,
+            height=150,
+        )
+
+
 def render_risk_data(data: list[dict]):
     """Render risk dashboard."""
     st.markdown("### ▓ RISK DASHBOARD")
@@ -520,22 +613,98 @@ def render_risk_data(data: list[dict]):
         )
 
 
-def render_anomaly_ticker(anomalies: list[dict]):
-    """Render the anomaly ticker at the bottom."""
-    if not anomalies:
-        ticker_text = "▓ SYSTEM NOMINAL — No active anomalies"
-        ticker_color = COLORS["normal"]
+def render_ticker_tray():
+    """
+    Render the PWST Ticker Tray - bottom component showing risk alerts.
+    
+    Fetches alerts from the API and displays them in a compact ticker format.
+    Alerts are color-coded by severity level.
+    """
+    # Fetch active alerts (excluding NORMAL status)
+    alerts = fetch_alerts(active_only=True, limit=30)
+    
+    # Filter out NORMAL alerts for ticker display
+    active_alerts = [a for a in alerts if a.get("alert_level") != "NORMAL"]
+    
+    # Summary counts
+    critical_count = len([a for a in alerts if a.get("alert_level") == "CRITICAL"])
+    warning_count = len([a for a in alerts if a.get("alert_level") == "WARNING"])
+    watch_count = len([a for a in alerts if a.get("alert_level") == "WATCH"])
+    
+    # Build ticker text
+    if not active_alerts:
+        # No active alerts - show nominal status
+        ticker_color = "#00FF00"
+        ticker_text = "▓ SYSTEM NOMINAL — All feeds operating within normal parameters"
     else:
-        critical = [a for a in anomalies if a.get("type") == "critical_deviation"]
-        warnings = [a for a in anomalies if a.get("type") == "significant_deviation"]
+        # Build alert summary
+        parts = []
+        if critical_count > 0:
+            parts.append(f"⚠ {critical_count} CRITICAL")
+            ticker_color = "#FF0000"
+        elif warning_count > 0:
+            parts.append(f"● {warning_count} WARNING")
+            ticker_color = "#FFA500"
+        else:
+            parts.append(f"● {watch_count} WATCH")
+            ticker_color = "#FFFF00"
+        
+        # Add individual alert details
+        alert_details = []
+        for a in active_alerts[:5]:  # Limit to 5 alerts
+            level = a.get("alert_level", "WATCH")
+            title = a.get("title", "Alert")
+            alert_type = a.get("alert_type", "SYS")
+            
+            # Color code by level
+            if level == "CRITICAL":
+                alert_details.append(f"[{alert_type}] {title}")
+            elif level == "WARNING":
+                alert_details.append(f"[{alert_type}] {title}")
+            else:
+                alert_details.append(f"[{alert_type}] {title}")
+        
+        ticker_text = " | ".join(parts) + " — " + " | ".join(alert_details)
+    
+    # Render as simple styled div
+    st.markdown(
+        f"""
+        <div style="
+            background-color: #161B22;
+            border-top: 2px solid {ticker_color};
+            border-left: 4px solid {ticker_color};
+            padding: 10px 16px;
+            font-family: 'JetBrains Mono', 'Consolas', monospace;
+            font-size: 12px;
+            color: #E6EDF3;
+            margin-top: 16px;
+        ">
+            <span style="color: {ticker_color}; font-weight: bold;">ALERTS</span>
+            &nbsp;&nbsp;
+            {ticker_text}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
+
+def render_anomaly_ticker(anomalies: list[dict]):
+    """Legacy anomaly ticker - now replaced by render_ticker_tray."""
+    # Keep for backward compatibility with anomaly display
+    if not anomalies:
+        return
+    
+    critical = [a for a in anomalies if a.get("type") == "critical_deviation"]
+    warnings = [a for a in anomalies if a.get("type") == "significant_deviation"]
+    
+    if critical or warnings:
         parts = []
         if critical:
             parts.append(f"⚠ {len(critical)} CRITICAL")
         if warnings:
             parts.append(f"● {len(warnings)} WARNINGS")
 
-        ticker_text = " | ".join(parts) + " | "
+        ticker_text = " | ".join(parts) + " — "
 
         # Add recent anomaly details
         for a in anomalies[:3]:
@@ -543,14 +712,14 @@ def render_anomaly_ticker(anomalies: list[dict]):
 
         ticker_color = COLORS["critical"] if critical else COLORS["warning"]
 
-    st.markdown(
-        f"""
-        <div class="ticker" style="border-left: 3px solid {ticker_color};">
-            {ticker_text}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            f"""
+            <div class="ticker" style="border-left: 3px solid {ticker_color};">
+                {ticker_text}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -640,7 +809,7 @@ def main():
                 unsafe_allow_html=True,
             )
 
-    # Ticker
+    # Legacy anomaly ticker (inline)
     render_anomaly_ticker(st.session_state.current_anomalies)
 
     # Help text
@@ -651,13 +820,17 @@ def main():
             |---------|-------------|
             | `WATR [region] <GO>` | Groundwater levels |
             | `GRID [region] <GO>` | Power grid status |
+            | `FLOW [port] <GO>` | Port/logistics data |
             | `RISK [region] <GO>` | Risk dashboard |
             
-            **Regions:** `US-TX` (Texas), `ERCOT` (Texas Grid)
+            **Regions:** `US-TX` (Texas), `ERCOT` (Texas Grid), `HOU` (Port of Houston)
             
             **Keyboard:** Press `Enter` to execute command
             """
         )
+
+    # PWST Ticker Tray - Fixed bottom component showing risk alerts
+    render_ticker_tray()
 
 
 if __name__ == "__main__":

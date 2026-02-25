@@ -76,6 +76,10 @@ def get_db_context() -> Generator[Session, None, None]:
         db.close()
 
 
+# Alias for compatibility
+get_db_session = get_db_context
+
+
 def check_database_connection() -> bool:
     """
     Verify database connectivity.

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from src.config.settings import settings
 from src.db.connection import check_database_connection, get_db, get_postgis_version
-from src.db.models import Anomaly, Indicator, Observation, Region, Station
+from src.db.models import Alert, Anomaly, Indicator, Observation, Region, Station
 
 logger = structlog.get_logger(__name__)
 
@@ -103,6 +103,20 @@ class AnomalyResponse(BaseModel):
     observed_value: float
 
 
+class AlertResponse(BaseModel):
+    """Risk alert for ticker display."""
+
+    alert_id: int
+    alert_type: str
+    alert_level: str
+    region_code: Optional[str]
+    title: str
+    message: str
+    indicator_values: dict[str, Any]
+    triggered_at: datetime
+    is_active: bool
+
+
 # ─────────────────────────────────────────────────────────────
 # Health Endpoints
 # ─────────────────────────────────────────────────────────────
@@ -174,6 +188,8 @@ def execute_command(request: CommandRequest, db: Session = Depends(get_db)):
             data, anomalies = execute_watr(db, region_code)
         elif function_code == "GRID":
             data, anomalies = execute_grid(db, region_code)
+        elif function_code == "FLOW":
+            data, anomalies = execute_flow(db, region_code)
         elif function_code == "RISK":
             data, anomalies = execute_risk(db, region_code)
         else:
@@ -417,6 +433,136 @@ def execute_grid(db: Session, region_code: str) -> tuple[list, list]:
     return data, anomalies
 
 
+def execute_flow(db: Session, region_code: str) -> tuple[list, list]:
+    """Execute FLOW command - port/logistics data."""
+    from geoalchemy2.shape import to_shape
+    
+    # Map region codes to port codes
+    port_map = {
+        "HOU": ["HOU"],
+        "HOUSTON": ["HOU"],
+        "GAL": ["GAL"],
+        "GALVESTON": ["GAL"],
+        "TXC": ["TXC"],
+        "TEXAS_CITY": ["TXC"],
+        "US-TX": ["HOU", "GAL", "TXC"],  # All Texas ports
+        "ERCOT": ["HOU", "GAL", "TXC"],
+    }
+    
+    target_ports = port_map.get(region_code.upper(), ["HOU"])
+    
+    # Get port indicators
+    indicator_codes = ["PORT_VESSELS", "PORT_WAITING", "PORT_DWELL", "PORT_THROUGHPUT"]
+    indicators = db.query(Indicator).filter(Indicator.code.in_(indicator_codes)).all()
+
+    if not indicators:
+        return [], []
+
+    indicator_map = {i.indicator_id: i for i in indicators}
+    code_to_id = {i.code: i.indicator_id for i in indicators}
+    indicator_ids = list(indicator_map.keys())
+
+    # Get recent observations
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+
+    # Get stations (ports)
+    stations = (
+        db.query(Station)
+        .filter(Station.station_type == "port")
+        .filter(Station.external_id.in_(target_ports))
+        .all()
+    )
+    
+    station_ids = [s.station_id for s in stations]
+    station_map = {s.station_id: s for s in stations}
+
+    observations = (
+        db.query(Observation)
+        .filter(Observation.indicator_id.in_(indicator_ids))
+        .filter(Observation.station_id.in_(station_ids))
+        .filter(Observation.observed_at >= cutoff)
+        .order_by(Observation.observed_at.desc())
+        .limit(500)
+        .all()
+    )
+
+    # Get anomalies
+    anomalies_query = (
+        db.query(Anomaly)
+        .filter(Anomaly.indicator_id.in_(indicator_ids))
+        .filter(Anomaly.detected_at >= cutoff)
+        .filter(Anomaly.is_acknowledged == False)
+        .order_by(Anomaly.severity.desc())
+        .limit(50)
+        .all()
+    )
+
+    # Get latest value for EACH indicator at EACH port
+    latest_by_port: dict[str, dict] = {}
+    
+    for station in stations:
+        port_code = station.external_id
+        point = to_shape(station.location)
+        latest_by_port[port_code] = {
+            "port_code": port_code,
+            "port_name": station.name,
+            "latitude": point.y,
+            "longitude": point.x,
+        }
+        
+        for code in indicator_codes:
+            ind_id = code_to_id.get(code)
+            if ind_id:
+                latest_obs = (
+                    db.query(Observation)
+                    .filter(Observation.indicator_id == ind_id)
+                    .filter(Observation.station_id == station.station_id)
+                    .order_by(Observation.observed_at.desc())
+                    .first()
+                )
+                if latest_obs:
+                    latest_by_port[port_code][code.lower()] = latest_obs.value
+                    latest_by_port[port_code]["observed_at"] = latest_obs.observed_at.isoformat()
+
+    # Build time series for charts
+    time_series: dict[str, dict] = {}
+    for obs in observations:
+        indicator = indicator_map.get(obs.indicator_id)
+        station = station_map.get(obs.station_id)
+        if not indicator or not station:
+            continue
+
+        time_key = f"{station.external_id}_{obs.observed_at.isoformat()}"
+        if time_key not in time_series:
+            time_series[time_key] = {
+                "observed_at": obs.observed_at.isoformat(),
+                "port_code": station.external_id,
+            }
+
+        time_series[time_key][indicator.code.lower()] = obs.value
+
+    # Combine latest summaries + time series
+    data = list(latest_by_port.values()) + list(time_series.values())
+
+    anomalies = [
+        {
+            "anomaly_id": a.anomaly_id,
+            "indicator": indicator_map.get(a.indicator_id).code
+            if a.indicator_id in indicator_map
+            else "unknown",
+            "severity": a.severity,
+            "z_score": a.z_score,
+            "baseline": a.baseline_value,
+            "observed": a.observed_value,
+            "detected_at": a.detected_at.isoformat(),
+            "type": a.anomaly_type,
+        }
+        for a in anomalies_query
+    ]
+
+    return data, anomalies
+
+
 def execute_risk(db: Session, region_code: str) -> tuple[list, list]:
     """Execute RISK command - aggregated risk dashboard."""
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
@@ -613,3 +759,85 @@ def get_stations(
         )
 
     return results
+
+
+# ─────────────────────────────────────────────────────────────
+# Alerts Endpoint (Ticker Tray)
+# ─────────────────────────────────────────────────────────────
+
+
+@app.get("/alerts", response_model=list[AlertResponse], tags=["Alerts"])
+def get_alerts(
+    active_only: bool = Query(True, description="Only return active alerts"),
+    alert_type: Optional[str] = Query(None, description="Filter by type (GRID, WATR, FLOW, LINKED)"),
+    alert_level: Optional[str] = Query(None, description="Filter by level (WATCH, WARNING, CRITICAL)"),
+    limit: int = Query(50, description="Maximum alerts to return"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get risk alerts for ticker display.
+    
+    Returns alerts from the Linked Fate risk engine, sorted by severity and time.
+    Used by the Ticker Tray UI component.
+    """
+    query = db.query(Alert)
+    
+    if active_only:
+        query = query.filter(Alert.is_active == True)
+    
+    if alert_type:
+        query = query.filter(Alert.alert_type == alert_type)
+    
+    if alert_level:
+        query = query.filter(Alert.alert_level == alert_level)
+    
+    # Order by severity (CRITICAL > WARNING > WATCH) then by time
+    level_order = {
+        "CRITICAL": 0,
+        "WARNING": 1,
+        "WATCH": 2,
+        "NORMAL": 3,
+    }
+    
+    alerts = query.order_by(
+        Alert.triggered_at.desc()
+    ).limit(limit).all()
+    
+    # Sort by level priority (in memory since we can't easily do case expression)
+    alerts_sorted = sorted(
+        alerts,
+        key=lambda a: (level_order.get(a.alert_level, 99), -a.triggered_at.timestamp())
+    )
+    
+    return [
+        AlertResponse(
+            alert_id=a.alert_id,
+            alert_type=a.alert_type,
+            alert_level=a.alert_level,
+            region_code=a.region_code,
+            title=a.title,
+            message=a.message,
+            indicator_values=a.indicator_values or {},
+            triggered_at=a.triggered_at,
+            is_active=a.is_active,
+        )
+        for a in alerts_sorted
+    ]
+
+
+@app.post("/alerts/{alert_id}/acknowledge", tags=["Alerts"])
+def acknowledge_alert(
+    alert_id: int,
+    db: Session = Depends(get_db),
+):
+    """Acknowledge an alert (user has seen it)."""
+    alert = db.query(Alert).filter(Alert.alert_id == alert_id).first()
+    
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    
+    alert.is_acknowledged = True
+    alert.acknowledged_at = datetime.now(timezone.utc)
+    db.commit()
+    
+    return {"status": "acknowledged", "alert_id": alert_id}

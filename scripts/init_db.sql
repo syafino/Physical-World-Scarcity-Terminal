@@ -157,6 +157,32 @@ CREATE INDEX IF NOT EXISTS idx_anomalies_indicator ON anomalies(indicator_id);
 CREATE INDEX IF NOT EXISTS idx_anomalies_unacked ON anomalies(is_acknowledged) WHERE NOT is_acknowledged;
 
 -- ===========================================
+-- RISK ALERTS (Linked Fate Engine)
+-- ===========================================
+
+CREATE TABLE IF NOT EXISTS alerts (
+    alert_id BIGSERIAL PRIMARY KEY,
+    alert_type VARCHAR(50) NOT NULL,  -- GRID, WATR, FLOW, LINKED
+    alert_level VARCHAR(20) NOT NULL, -- NORMAL, WATCH, WARNING, CRITICAL
+    region_code VARCHAR(20),
+    title VARCHAR(255) NOT NULL,
+    message TEXT NOT NULL,
+    indicator_values JSONB DEFAULT '{}',
+    triggered_at TIMESTAMPTZ DEFAULT NOW(),
+    expires_at TIMESTAMPTZ,
+    is_active BOOLEAN DEFAULT TRUE,
+    is_acknowledged BOOLEAN DEFAULT FALSE,
+    acknowledged_at TIMESTAMPTZ,
+    metadata JSONB DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_alerts_active ON alerts(is_active, triggered_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_level ON alerts(alert_level);
+CREATE INDEX IF NOT EXISTS idx_alerts_type ON alerts(alert_type);
+CREATE INDEX IF NOT EXISTS idx_alerts_region ON alerts(region_code);
+CREATE INDEX IF NOT EXISTS idx_alerts_unacked ON alerts(is_acknowledged) WHERE NOT is_acknowledged;
+
+-- ===========================================
 -- COMMAND AUDIT LOG
 -- ===========================================
 
@@ -204,7 +230,8 @@ INSERT INTO data_sources (code, name, base_url, api_type, rate_limit_per_hour, i
     ('USGS_NWIS', 'USGS National Water Information System', 'https://waterservices.usgs.gov/nwis/', 'REST', NULL, TRUE, 'NONE', 'active'),
     ('EIA_API', 'US Energy Information Administration', 'https://api.eia.gov/v2/', 'REST', 30, TRUE, 'API_KEY', 'active'),
     ('NOAA_NCEI', 'NOAA National Centers for Environmental Information', 'https://www.ncei.noaa.gov/cdo-web/api/v2/', 'REST', 5, TRUE, 'API_KEY', 'active'),
-    ('NWS_API', 'National Weather Service API', 'https://api.weather.gov/', 'REST', NULL, TRUE, 'NONE', 'active')
+    ('NWS_API', 'National Weather Service API', 'https://api.weather.gov/', 'REST', NULL, TRUE, 'NONE', 'active'),
+    ('PORT_SIM', 'Port Simulation Engine', 'simulation://localhost', 'SIMULATION', NULL, TRUE, 'NONE', 'active')
 ON CONFLICT (code) DO NOTHING;
 
 -- ===========================================
@@ -234,7 +261,17 @@ INSERT INTO indicators (code, name, category, unit, description, function_code, 
     ('GRID_SOLAR', 'Solar Generation', 'energy', 'MW', 'Electricity from solar sources', 'GRID',
         (SELECT source_id FROM data_sources WHERE code = 'EIA_API'), '1 hour'),
     ('GRID_GAS', 'Natural Gas Generation', 'energy', 'MW', 'Electricity from natural gas', 'GRID',
-        (SELECT source_id FROM data_sources WHERE code = 'EIA_API'), '1 hour')
+        (SELECT source_id FROM data_sources WHERE code = 'EIA_API'), '1 hour'),
+    
+    -- Logistics/Port indicators (Phase 2)
+    ('PORT_VESSELS', 'Vessels in Port', 'logistics', 'count', 'Number of vessels currently at berth', 'FLOW',
+        (SELECT source_id FROM data_sources WHERE code = 'PORT_SIM'), '15 minutes'),
+    ('PORT_WAITING', 'Vessels Waiting', 'logistics', 'count', 'Number of vessels at anchor waiting for berth', 'FLOW',
+        (SELECT source_id FROM data_sources WHERE code = 'PORT_SIM'), '15 minutes'),
+    ('PORT_DWELL', 'Average Dwell Time', 'logistics', 'hours', 'Average time vessels spend at berth', 'FLOW',
+        (SELECT source_id FROM data_sources WHERE code = 'PORT_SIM'), '1 hour'),
+    ('PORT_THROUGHPUT', 'Daily Throughput', 'logistics', 'TEU', 'Container throughput in twenty-foot equivalent units', 'FLOW',
+        (SELECT source_id FROM data_sources WHERE code = 'PORT_SIM'), '1 hour')
 ON CONFLICT (code) DO NOTHING;
 
 -- ===========================================

@@ -420,6 +420,7 @@ def render_data_panel(data: Optional[list[dict]], function_code: Optional[str]):
                 <p style="color: #00FF00;">WATR US-TX &lt;GO&gt;</p>
                 <p style="color: #00FF00;">GRID ERCOT &lt;GO&gt;</p>
                 <p style="color: #00FF00;">FIN US-TX &lt;GO&gt;</p>
+                <p style="color: #00FF00;">NEWS US-TX &lt;GO&gt;</p>
                 <p style="color: #00FF00;">RISK US-TX &lt;GO&gt;</p>
             </div>
             """,
@@ -438,6 +439,10 @@ def render_data_panel(data: Optional[list[dict]], function_code: Optional[str]):
         render_risk_data(data)
     elif function_code == "FIN":
         render_fin_data(data)
+    elif function_code == "NEWS":
+        render_news_data(data)
+    elif function_code == "WX":
+        render_wx_data(data)
     else:
         # Generic table view
         df = pd.DataFrame(data)
@@ -780,6 +785,437 @@ def render_fin_data(data: list[dict]):
                 )
 
 
+def render_news_data(data: list[dict]):
+    """
+    Render NEWS command - news headlines with sentiment analysis.
+    
+    Displays a dense scrolling list of headlines color-coded by sentiment:
+    - Green: Positive sentiment
+    - Yellow: Neutral sentiment  
+    - Red: Negative sentiment
+    
+    Phase 4: Unstructured Data Layer
+    """
+    st.markdown("### ▓ NEWS & SENTIMENT ANALYSIS")
+    
+    if not data:
+        st.markdown("*No news data available. Fetching from RSS feeds...*")
+        return
+    
+    # Get summary from first record if available
+    summary = data[0].get("_summary", {}) if data else {}
+    
+    # ─────────────────────────────────────────────────────────────
+    # Summary Header
+    # ─────────────────────────────────────────────────────────────
+    if summary:
+        overall_sentiment = summary.get("overall_sentiment", 0)
+        total_headlines = summary.get("total_headlines", len(data))
+        
+        # Determine overall sentiment color and label
+        if overall_sentiment <= -0.5:
+            sentiment_color = "#FF0000"
+            sentiment_label = "VERY NEGATIVE"
+        elif overall_sentiment <= -0.05:
+            sentiment_color = "#FFA500"
+            sentiment_label = "NEGATIVE"
+        elif overall_sentiment < 0.05:
+            sentiment_color = "#FFFF00"
+            sentiment_label = "NEUTRAL"
+        elif overall_sentiment < 0.5:
+            sentiment_color = "#90EE90"
+            sentiment_label = "POSITIVE"
+        else:
+            sentiment_color = "#00FF00"
+            sentiment_label = "VERY POSITIVE"
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("HEADLINES", total_headlines)
+        with col2:
+            st.markdown(
+                f"""
+                <div style="padding: 8px;">
+                    <div style="color: #6E7681; font-size: 12px;">OVERALL SENTIMENT</div>
+                    <div style="color: {sentiment_color}; font-size: 24px; font-weight: bold;">
+                        {sentiment_label}
+                    </div>
+                    <div style="color: #6E7681; font-size: 11px;">Score: {overall_sentiment:.3f}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with col3:
+            categories = summary.get("categories", {})
+            negative_total = sum(c.get("negative_count", 0) for c in categories.values())
+            st.metric("NEGATIVE HEADLINES", negative_total)
+    
+    # ─────────────────────────────────────────────────────────────
+    # Category Breakdown
+    # ─────────────────────────────────────────────────────────────
+    if summary and summary.get("categories"):
+        st.markdown("#### Category Sentiment")
+        
+        categories = summary.get("categories", {})
+        cols = st.columns(len(categories))
+        
+        for i, (cat_name, cat_data) in enumerate(categories.items()):
+            with cols[i]:
+                avg_sent = cat_data.get("avg_sentiment", 0)
+                cat_color = _get_sentiment_color(avg_sent)
+                
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: #161B22;
+                        border-left: 3px solid {cat_color};
+                        padding: 8px;
+                        margin-bottom: 8px;
+                    ">
+                        <div style="color: #58A6FF; font-size: 11px;">{cat_name}</div>
+                        <div style="color: {cat_color}; font-size: 14px; font-weight: bold;">
+                            {avg_sent:.2f}
+                        </div>
+                        <div style="color: #6E7681; font-size: 10px;">
+                            {cat_data.get('headline_count', 0)} headlines
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+    
+    # ─────────────────────────────────────────────────────────────
+    # Headlines List (scrollable)
+    # ─────────────────────────────────────────────────────────────
+    st.markdown("#### Headlines")
+    
+    # Create scrollable container for headlines
+    headlines_html = ""
+    
+    for item in data[:30]:  # Limit displayed headlines
+        title = item.get("title", "")
+        source = item.get("source", "Unknown")
+        sentiment_score = item.get("sentiment_score", 0)
+        sentiment_label = item.get("sentiment_label", "NEUTRAL")
+        category = item.get("category", "")
+        published = item.get("published_at", "")[:16] if item.get("published_at") else ""
+        url = item.get("url", "")
+        
+        # Get color based on sentiment
+        sentiment_color = _get_sentiment_color(sentiment_score)
+        
+        # Sentiment indicator
+        if sentiment_score <= -0.5:
+            indicator = "▼▼"
+        elif sentiment_score <= -0.05:
+            indicator = "▼"
+        elif sentiment_score < 0.05:
+            indicator = "●"
+        elif sentiment_score < 0.5:
+            indicator = "▲"
+        else:
+            indicator = "▲▲"
+        
+        headlines_html += f"""
+        <div style="
+            background-color: #161B22;
+            border-left: 3px solid {sentiment_color};
+            padding: 8px 12px;
+            margin-bottom: 4px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+        ">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <div style="flex: 1;">
+                    <a href="{url}" target="_blank" style="color: #E6EDF3; text-decoration: none;">
+                        {title}
+                    </a>
+                    <div style="color: #6E7681; font-size: 10px; margin-top: 4px;">
+                        {source} | {category} | {published}
+                    </div>
+                </div>
+                <div style="
+                    color: {sentiment_color};
+                    font-weight: bold;
+                    min-width: 50px;
+                    text-align: right;
+                ">
+                    {indicator} {sentiment_score:.2f}
+                </div>
+            </div>
+        </div>
+        """
+    
+    st.markdown(
+        f"""
+        <div style="max-height: 400px; overflow-y: auto;">
+            {headlines_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_wx_data(data: list[dict]):
+    """
+    Render WX command - weather forecasts with temperature danger zones.
+    
+    Shows 7-day forecasts for key Texas locations with:
+    - Temperature danger zone indicators (heat/freeze risk)
+    - Grid strain predictions
+    - Temperature chart with danger thresholds
+    - NWS weather alerts
+    
+    Phase 5: The Predictive Layer
+    """
+    st.markdown("### ▓ WEATHER FORECAST & PREDICTIVE ANALYSIS")
+    st.markdown("*Texas Node Predictive Layer - Anticipating Scarcity Before It Happens*")
+    
+    if not data:
+        st.markdown("*No weather data available. Fetching from NWS API...*")
+        return
+    
+    # Get summary from first record if available
+    summary = data[0].get("_summary", {}) if data else {}
+    nws_alerts = data[0].get("_nws_alerts", []) if data else []
+    
+    # ─────────────────────────────────────────────────────────────
+    # Summary Header - Grid Strain Prediction
+    # ─────────────────────────────────────────────────────────────
+    if summary:
+        heat_risk = summary.get("overall_heat_risk", "NONE")
+        freeze_risk = summary.get("overall_freeze_risk", "NONE")
+        grid_strain = summary.get("overall_grid_strain", "NORMAL")
+        
+        # Determine grid strain color
+        strain_colors = {
+            "NORMAL": "#00FF00",
+            "ELEVATED": "#FFFF00",
+            "HIGH": "#FFA500",
+            "SEVERE": "#FF4500",
+            "EXTREME": "#FF0000",
+        }
+        strain_color = strain_colors.get(grid_strain, "#6E7681")
+        
+        # Risk colors
+        risk_colors = {
+            "NONE": "#00FF00",
+            "MODERATE": "#FFFF00",
+            "HIGH": "#FFA500",
+            "SEVERE": "#FF4500",
+            "EXTREME": "#FF0000",
+        }
+        heat_color = risk_colors.get(heat_risk, "#6E7681")
+        freeze_color = risk_colors.get(freeze_risk, "#6E7681")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(
+                f"""
+                <div style="
+                    background-color: #161B22;
+                    border-left: 4px solid {strain_color};
+                    padding: 12px;
+                ">
+                    <div style="color: #6E7681; font-size: 11px;">48H GRID STRAIN PREDICTION</div>
+                    <div style="color: {strain_color}; font-size: 24px; font-weight: bold;">
+                        {grid_strain}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with col2:
+            st.markdown(
+                f"""
+                <div style="
+                    background-color: #161B22;
+                    border-left: 4px solid {heat_color};
+                    padding: 12px;
+                ">
+                    <div style="color: #6E7681; font-size: 11px;">HEAT RISK</div>
+                    <div style="color: {heat_color}; font-size: 20px; font-weight: bold;">
+                        {heat_risk}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        with col3:
+            st.markdown(
+                f"""
+                <div style="
+                    background-color: #161B22;
+                    border-left: 4px solid {freeze_color};
+                    padding: 12px;
+                ">
+                    <div style="color: #6E7681; font-size: 11px;">FREEZE RISK</div>
+                    <div style="color: {freeze_color}; font-size: 20px; font-weight: bold;">
+                        {freeze_risk}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    
+    # ─────────────────────────────────────────────────────────────
+    # NWS Active Alerts
+    # ─────────────────────────────────────────────────────────────
+    if nws_alerts:
+        st.markdown("#### Active Weather Alerts")
+        for alert in nws_alerts[:3]:
+            event = alert.get("event", "Weather Alert")
+            headline = alert.get("headline", "")[:100]
+            severity = alert.get("severity", "")
+            
+            alert_color = "#FF0000" if severity in ["Extreme", "Severe"] else "#FFA500"
+            
+            st.markdown(
+                f"""
+                <div style="
+                    background-color: #161B22;
+                    border-left: 4px solid {alert_color};
+                    padding: 8px 12px;
+                    margin-bottom: 4px;
+                    font-size: 11px;
+                ">
+                    <span style="color: {alert_color}; font-weight: bold;">{event}</span>
+                    <span style="color: #6E7681; margin-left: 8px;">{headline}</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    
+    # ─────────────────────────────────────────────────────────────
+    # Location Forecasts with Temperature Chart
+    # ─────────────────────────────────────────────────────────────
+    st.markdown("#### Location Forecasts (48h)")
+    
+    for loc_data in data:
+        location_name = loc_data.get("location_name", "Unknown")
+        purpose = loc_data.get("purpose", "")
+        max_temp = loc_data.get("max_temp_48h")
+        min_temp = loc_data.get("min_temp_48h")
+        heat_risk = loc_data.get("heat_risk", "NONE")
+        freeze_risk = loc_data.get("freeze_risk", "NONE")
+        hourly = loc_data.get("hourly", [])
+        
+        # Skip if no location name (might be summary metadata)
+        if not location_name or location_name == "Unknown":
+            continue
+        
+        # Determine location color based on highest risk
+        if heat_risk in ["HIGH", "EXTREME"] or freeze_risk in ["SEVERE", "EXTREME"]:
+            loc_color = "#FF0000"
+        elif heat_risk == "MODERATE" or freeze_risk == "MODERATE":
+            loc_color = "#FFA500"
+        else:
+            loc_color = "#00FF00"
+        
+        col_info, col_chart = st.columns([1, 2])
+        
+        with col_info:
+            st.markdown(
+                f"""
+                <div style="
+                    background-color: #161B22;
+                    border-left: 4px solid {loc_color};
+                    padding: 12px;
+                    margin-bottom: 8px;
+                ">
+                    <div style="color: #58A6FF; font-size: 14px; font-weight: bold;">{location_name}</div>
+                    <div style="color: #6E7681; font-size: 10px; margin-bottom: 8px;">{purpose}</div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <div>
+                            <div style="color: #6E7681; font-size: 10px;">HIGH</div>
+                            <div style="color: {'#FF4500' if max_temp and max_temp >= 98 else '#E6EDF3'}; font-size: 18px;">
+                                {max_temp}°F
+                            </div>
+                        </div>
+                        <div>
+                            <div style="color: #6E7681; font-size: 10px;">LOW</div>
+                            <div style="color: {'#00BFFF' if min_temp and min_temp <= 32 else '#E6EDF3'}; font-size: 18px;">
+                                {min_temp}°F
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        
+        with col_chart:
+            # Build temperature chart from hourly data
+            if hourly and len(hourly) > 0:
+                temps = []
+                times = []
+                for h in hourly[:48]:  # 48 hours
+                    temps.append(h.get("temperature", 0))
+                    times.append(h.get("time", ""))
+                
+                if temps:
+                    chart_df = pd.DataFrame({
+                        "Temperature (°F)": temps,
+                    })
+                    
+                    # Simple line chart
+                    st.line_chart(
+                        chart_df,
+                        use_container_width=True,
+                        height=100,
+                    )
+                    
+                    # Danger zone indicators
+                    thresholds = summary.get("thresholds", {})
+                    heat_threshold = thresholds.get("HIGH_HEAT", 98)
+                    freeze_threshold = thresholds.get("FREEZE_WARNING", 32)
+                    
+                    if max(temps) >= heat_threshold:
+                        st.markdown(
+                            f"<span style='color: #FF4500; font-size: 10px;'>⚠ DANGER ZONE: Temps exceed {heat_threshold}°F</span>",
+                            unsafe_allow_html=True,
+                        )
+                    if min(temps) <= freeze_threshold:
+                        st.markdown(
+                            f"<span style='color: #00BFFF; font-size: 10px;'>⚠ FREEZE ZONE: Temps below {freeze_threshold}°F</span>",
+                            unsafe_allow_html=True,
+                        )
+        
+        st.markdown("---")
+    
+    # ─────────────────────────────────────────────────────────────
+    # Thresholds Reference
+    # ─────────────────────────────────────────────────────────────
+    with st.expander("Temperature Thresholds Reference", expanded=False):
+        thresholds = summary.get("thresholds", {})
+        st.markdown(
+            f"""
+            | Threshold | Temperature | Impact |
+            |-----------|-------------|--------|
+            | EXTREME_HEAT | >{thresholds.get('EXTREME_HEAT', 100)}°F | Extreme grid strain, rolling blackouts possible |
+            | HIGH_HEAT | >{thresholds.get('HIGH_HEAT', 98)}°F | High grid strain danger zone |
+            | MODERATE_HEAT | >{thresholds.get('MODERATE_HEAT', 95)}°F | Elevated demand, monitor closely |
+            | FREEZE_WARNING | <{thresholds.get('FREEZE_WARNING', 32)}°F | Freeze risk, pipe/infrastructure concern |
+            | HARD_FREEZE | <{thresholds.get('HARD_FREEZE', 25)}°F | Severe freeze (2021 crisis level) |
+            | EXTREME_COLD | <{thresholds.get('EXTREME_COLD', 15)}°F | Extreme cold emergency |
+            """
+        )
+
+
+def _get_sentiment_color(sentiment: float) -> str:
+    """Get color for sentiment score."""
+    if sentiment <= -0.5:
+        return "#FF0000"  # Very negative - red
+    elif sentiment <= -0.05:
+        return "#FFA500"  # Negative - orange
+    elif sentiment < 0.05:
+        return "#FFFF00"  # Neutral - yellow
+    elif sentiment < 0.5:
+        return "#90EE90"  # Positive - light green
+    else:
+        return "#00FF00"  # Very positive - green
+
+
 def _get_status_color(status: str) -> str:
     """Get color for status level."""
     colors = {
@@ -791,12 +1227,48 @@ def _get_status_color(status: str) -> str:
     return colors.get(status, "#6E7681")
 
 
+def fetch_news_sentiment():
+    """Fetch news sentiment summary for ticker tray."""
+    try:
+        response = httpx.get(f"{API_URL}/news/summary", timeout=5.0)
+        if response.status_code == 200:
+            return response.json()
+    except Exception:
+        pass
+    return None
+
+
+def fetch_predictive_alerts():
+    """Fetch predictive weather alerts for ticker tray (Phase 5)."""
+    try:
+        response = httpx.get(f"{API_URL}/weather/predictive-alerts", timeout=5.0)
+        if response.status_code == 200:
+            return response.json().get("predictive_alerts", [])
+    except Exception:
+        pass
+    return []
+
+
+def fetch_weather_danger():
+    """Fetch weather danger assessment for ticker tray (Phase 5)."""
+    try:
+        response = httpx.get(f"{API_URL}/weather/danger", timeout=5.0)
+        if response.status_code == 200:
+            return response.json().get("danger_assessment", {})
+    except Exception:
+        pass
+    return {}
+
+
 def render_ticker_tray():
     """
     Render the PWST Ticker Tray - bottom component showing risk alerts.
     
     Fetches alerts from the API and displays them in a compact ticker format.
     Alerts are color-coded by severity level.
+    
+    Phase 4: Also includes high-impact negative news headlines.
+    Phase 5: Includes predictive weather alerts with [PREDICTIVE] tag.
     """
     # Fetch active alerts (excluding NORMAL status)
     alerts = fetch_alerts(active_only=True, limit=30)
@@ -804,13 +1276,28 @@ def render_ticker_tray():
     # Filter out NORMAL alerts for ticker display
     active_alerts = [a for a in alerts if a.get("alert_level") != "NORMAL"]
     
+    # Separate predictive alerts (Phase 5)
+    predictive_alerts = [a for a in active_alerts if a.get("alert_type") == "PREDICTIVE"]
+    physical_alerts = [a for a in active_alerts if a.get("alert_type") != "PREDICTIVE"]
+    
     # Summary counts
     critical_count = len([a for a in alerts if a.get("alert_level") == "CRITICAL"])
     warning_count = len([a for a in alerts if a.get("alert_level") == "WARNING"])
     watch_count = len([a for a in alerts if a.get("alert_level") == "WATCH"])
+    predictive_count = len(predictive_alerts)
+    
+    # Fetch news sentiment (Phase 4)
+    news_data = fetch_news_sentiment()
+    critical_headlines = news_data.get("critical_headlines", []) if news_data else []
+    overall_sentiment = news_data.get("overall_sentiment", 0) if news_data else 0
+    
+    # Fetch weather danger (Phase 5)
+    weather_danger = fetch_weather_danger()
+    overall_danger = weather_danger.get("overall", {}) if weather_danger else {}
+    grid_strain = overall_danger.get("grid_strain_prediction", "NORMAL")
     
     # Build ticker text
-    if not active_alerts:
+    if not active_alerts and not critical_headlines:
         # No active alerts - show nominal status
         ticker_color = "#00FF00"
         ticker_text = "▓ SYSTEM NOMINAL — All feeds operating within normal parameters"
@@ -823,28 +1310,40 @@ def render_ticker_tray():
         elif warning_count > 0:
             parts.append(f"● {warning_count} WARNING")
             ticker_color = "#FFA500"
+        elif predictive_count > 0:
+            parts.append(f"◆ {predictive_count} PREDICTIVE")
+            ticker_color = "#FF6B6B"  # Salmon for predictive
+        elif critical_headlines:
+            parts.append(f"● {len(critical_headlines)} NEG NEWS")
+            ticker_color = "#FFA500"
         else:
             parts.append(f"● {watch_count} WATCH")
             ticker_color = "#FFFF00"
         
         # Add individual alert details
         alert_details = []
-        for a in active_alerts[:5]:  # Limit to 5 alerts
+        
+        # Prioritize predictive alerts (Phase 5)
+        for a in predictive_alerts[:2]:
+            title = a.get("title", "Predictive Alert")[:50]
+            alert_details.append(f"[PREDICTIVE] {title}")
+        
+        # Then physical alerts
+        for a in physical_alerts[:2]:
             level = a.get("alert_level", "WATCH")
             title = a.get("title", "Alert")
             alert_type = a.get("alert_type", "SYS")
-            
-            # Color code by level
-            if level == "CRITICAL":
-                alert_details.append(f"[{alert_type}] {title}")
-            elif level == "WARNING":
-                alert_details.append(f"[{alert_type}] {title}")
-            else:
-                alert_details.append(f"[{alert_type}] {title}")
+            alert_details.append(f"[{alert_type}] {title}")
+        
+        # Add critical news headlines (Phase 4)
+        for h in critical_headlines[:1]:  # Limit to 1 headline (reduced for predictive)
+            title = h.get("title", "")[:40]
+            category = h.get("category", "NEWS")
+            alert_details.append(f"[{category}] {title}...")
         
         ticker_text = " | ".join(parts) + " — " + " | ".join(alert_details)
     
-    # Render as simple styled div
+    # Main ticker
     st.markdown(
         f"""
         <div style="
@@ -860,6 +1359,45 @@ def render_ticker_tray():
             <span style="color: {ticker_color}; font-weight: bold;">ALERTS</span>
             &nbsp;&nbsp;
             {ticker_text}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    
+    # Secondary line: Weather prediction + News sentiment (Phase 4 + 5)
+    # Determine grid strain color
+    strain_colors = {
+        "NORMAL": "#00FF00",
+        "ELEVATED": "#FFFF00", 
+        "HIGH": "#FFA500",
+        "SEVERE": "#FF4500",
+        "EXTREME": "#FF0000",
+    }
+    strain_color = strain_colors.get(grid_strain, "#6E7681")
+    
+    sent_color = _get_sentiment_color(overall_sentiment) if news_data else "#6E7681"
+    sent_label = "POSITIVE" if overall_sentiment > 0.05 else "NEGATIVE" if overall_sentiment < -0.05 else "NEUTRAL"
+    
+    st.markdown(
+        f"""
+        <div style="
+            background-color: #0D1117;
+            padding: 4px 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px;
+            color: #6E7681;
+            display: flex;
+            justify-content: space-between;
+        ">
+            <span>
+                <span style="color: {strain_color};">◆</span>
+                48H GRID FORECAST: <span style="color: {strain_color};">{grid_strain}</span>
+            </span>
+            <span>
+                <span style="color: {sent_color};">●</span>
+                NEWS: <span style="color: {sent_color};">{sent_label}</span>
+                ({overall_sentiment:.2f})
+            </span>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1000,11 +1538,19 @@ def main():
             | `GRID [region] <GO>` | Power grid status |
             | `FLOW [port] <GO>` | Port/logistics data |
             | `FIN [region] <GO>` | Financial correlation view (Phase 3) |
+            | `NEWS [region] <GO>` | News sentiment analysis (Phase 4) |
+            | `WX [region] <GO>` | Weather forecasts & predictive analysis (Phase 5) |
             | `RISK [region] <GO>` | Risk dashboard |
             
             **Regions:** `US-TX` (Texas), `ERCOT` (Texas Grid), `HOU` (Port of Houston)
             
             **Watchlist:** `VST` (Vistra), `NRG` (NRG Energy), `TXN` (Texas Instruments)
+            
+            **News Categories:** GRID, WATER, LOGISTICS, EQUITY
+            
+            **Weather Locations:** DALLAS, HOUSTON (ERCOT load center, Port/Logistics)
+            
+            **Danger Zones:** >98°F (heat risk), <25°F (freeze risk)
             
             **Keyboard:** Press `Enter` to execute command
             """

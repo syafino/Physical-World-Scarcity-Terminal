@@ -1,8 +1,8 @@
 # PWST Technical Architecture Specification
 ## Physical World Scarcity Terminal — Source of Truth Document
-**Version:** 0.3.0-alpha  
-**Last Updated:** 2026-02-26  
-**Status:** Phase 3 — Financial Intersection
+**Version:** 0.5.0-alpha  
+**Last Updated:** 2026-02-27  
+**Status:** Phase 5 — The Predictive Layer
 
 ---
 
@@ -227,11 +227,13 @@ When migrating to Snowflake, leverage:
 | P1 | NASA Earthdata | GRACE, MODIS | Requires free account | `earthaccess` | ✅ Verified |
 | P1 | Copernicus/Sentinel | Satellite imagery | Free for research | `sentinelsat` | ✅ Verified |
 | P1 | OpenStreetMap | Infrastructure geometry | Unlimited | `osmnx` | ✅ Verified |
-| P2 | NWS API | Weather alerts | Unlimited | `requests` | ✅ Verified |
+| P0 | NWS API | Weather forecasts, alerts | Unlimited | `requests` | ✅ Phase 5 |
 | P2 | USDA NASS | Crop statistics | Unlimited | `requests` | ✅ Verified |
 | P3 | MarineTraffic | AIS vessel positions | 100/day free | `requests` | [TO BE VERIFIED] |
 | P3 | UN Comtrade | Trade flows | 100/hr guest | `comtradeapicall` | [TO BE VERIFIED] |
 | P1 | Yahoo Finance | Stock quotes/history | Unlimited | `yfinance` | ✅ Phase 3 |
+| P1 | Google News RSS | News headlines | Unlimited | `feedparser` | ✅ Phase 4 |
+| P1 | Local NLP | Sentiment scoring | N/A | `nltk` (VADER) | ✅ Phase 4 |
 
 ### 4.2 Paid Fallback Strategy ($25 Budget)
 
@@ -332,6 +334,8 @@ SHIP SUEZ -48h <GO>          # Suez Canal traffic, last 48 hours
 CORR WATR:AGRI US-CA <GO>    # Correlate water to agriculture
 RISK US-CA <GO>              # Full risk dashboard for region
 FIN US-TX <GO>               # Financial correlation view (Phase 3)
+NEWS US-TX <GO>              # News sentiment analysis (Phase 4)
+WX US-TX <GO>                # Weather forecasts & predictive alerts (Phase 5)
 ```
 
 **Modifiers:**
@@ -511,7 +515,119 @@ RULE: MARKET_REACTION_SUPPLY_CHAIN
 - `fetch-market-data-15m`: Fetches Texas watchlist quotes every 15 minutes
 - `evaluate-market-correlation-5m`: Runs correlation analysis every 5 minutes
 
-### 6.4 Correlation Engine
+### 6.5 Linked Fate v3: Sentiment Correlation (Phase 4)
+
+**Unstructured Data Layer — News & Public Sentiment:**
+
+Phase 4 introduces news ingestion and sentiment analysis to detect public perception correlations with physical events.
+
+**Data Sources:**
+- Google News RSS feeds (free, unlimited)
+- NLTK VADER lexicon for local sentiment scoring
+
+**Texas Node Query Keywords:**
+| Category | Keywords |
+|----------|----------|
+| `GRID` | ERCOT, Texas power grid, Texas electricity, Texas blackout |
+| `WATER` | Texas drought, Texas water shortage, Texas aquifer, Edwards Aquifer |
+| `LOGISTICS` | Port of Houston, Houston Ship Channel, Texas shipping |
+| `EQUITY` | Vistra Energy, NRG Energy stock, Texas Instruments TXN |
+
+**Sentiment Scoring (VADER):**
+| Score Range | Label | Alert Trigger |
+|-------------|-------|---------------|
+| ≤ -0.5 | VERY_NEGATIVE | Critical event flag |
+| -0.5 to -0.05 | NEGATIVE | Correlation check |
+| -0.05 to 0.05 | NEUTRAL | No action |
+| 0.05 to 0.5 | POSITIVE | No action |
+| > 0.5 | VERY_POSITIVE | No action |
+
+**Correlation Rules (v3):**
+```
+RULE: PHYSICAL_PUBLIC_STRAIN
+  IF (Physical Alert: GRID/WATER/PORT is WARNING or CRITICAL)
+  AND (News Sentiment for category < -0.5)
+  THEN alert = "CRITICAL: PHYSICAL & PUBLIC STRAIN"
+  confidence = STRONG
+  
+RULE: TRIPLE_CORRELATION
+  IF (Physical Alert is ACTIVE)
+  AND (News Sentiment < -0.2)
+  AND (Related stock moving > 2%)
+  THEN alert = "TRIPLE ALERT: Physical + Sentiment + Market"
+  confidence = STRONG
+```
+
+**Celery Task Schedule:**
+- `fetch-news-15m`: Fetches and scores news headlines every 15 minutes
+
+### 6.6 Linked Fate v4: Predictive Correlation (Phase 5)
+
+**The Predictive Layer — Weather Forecasts & Scarcity Anticipation:**
+
+Phase 5 introduces predictive intelligence by ingesting NWS weather forecasts to anticipate grid strain and water stress **before they occur**. A true physical terminal anticipates scarcity.
+
+**Data Source:**
+- **NWS API** (api.weather.gov) — 100% free, no API key, requires User-Agent header
+- 2-step process: lat/lon → gridId/gridX/gridY → forecast endpoint
+
+**Texas Weather Monitoring Locations:**
+| Location | Coordinates | Purpose |
+|----------|-------------|---------|
+| Dallas | 32.7767, -96.7970 | ERCOT load center, heat demand |
+| Houston | 29.7604, -95.3698 | Port logistics, storm exposure |
+| Austin | 30.2672, -97.7431 | Population center, grid demand |
+| San Antonio | 29.4241, -98.4936 | Water stress, aquifer monitoring |
+
+**Temperature Danger Thresholds:**
+| Threshold | Temperature | Scarcity Impact |
+|-----------|-------------|-----------------|
+| EXTREME_HEAT | >100°F | Grid strain imminent, demand spike |
+| HIGH_HEAT | >98°F | Elevated load, conservation alerts |
+| MODERATE_HEAT | >95°F | Watch zone |
+| FREEZE_WARNING | <32°F | Pipe/infrastructure risk |
+| HARD_FREEZE | <25°F | Emergency grid conditions (2021 repeat risk) |
+| EXTREME_COLD | <15°F | Critical infrastructure failure risk |
+
+**Predictive Correlation Rules (v4):**
+```
+RULE: PREDICTIVE_HEAT_STRAIN
+  IF (Forecast temp >100°F within 48 hours)
+  AND (Current ERCOT margin <10%)
+  THEN alert = "[PREDICTIVE] GRID STRAIN EXPECTED"
+  tag = "48H FORECAST"
+  confidence = HIGH
+  
+RULE: PREDICTIVE_FREEZE_EMERGENCY
+  IF (Forecast temp <25°F within 48 hours)
+  THEN alert = "[PREDICTIVE] FREEZE EMERGENCY RISK"
+  reference = "Feb 2021 Texas Grid Collapse"
+  confidence = CRITICAL
+
+RULE: PREDICTIVE_PORT_STORM
+  IF (NWS alert contains "hurricane" OR "tropical storm")
+  AND (Location = Houston)
+  THEN alert = "[PREDICTIVE] PORT DISRUPTION RISK"
+  impact = "Supply chain 72h+ delay expected"
+  confidence = HIGH
+```
+
+**WX Command Usage:**
+```
+WX US-TX <GO>                # Full Texas weather view
+WX US-TX -danger <GO>        # Temperature danger zones only
+WX US-TX -alerts <GO>        # NWS active alerts
+WX US-TX -predictive <GO>    # Predictive correlation alerts
+```
+
+**Celery Task Schedule:**
+- `fetch-weather-2h`: Fetches NWS forecasts every 2 hours at :00
+- `evaluate-predictive-15m`: Runs Linked Fate v4 predictive analysis every 15 minutes
+
+**Ticker Tray Integration:**
+Predictive alerts appear in ticker tray with `[PREDICTIVE]` prefix and severity color coding based on confidence level.
+
+### 6.7 Correlation Engine
 
 **Hypothesis Testing:**
 - Null: Physical indicator X has no predictive relationship with economic indicator Y
@@ -582,10 +698,12 @@ Physical-World-Scarcity-Terminal/
 │   │   ├── usgs.py
 │   │   ├── noaa.py
 │   │   ├── eia.py
+│   │   ├── weather.py          # NWS API forecasts (Phase 5)
 │   │   └── scheduler.py        # Celery tasks
 │   ├── analysis/
 │   │   ├── anomaly.py
 │   │   ├── correlation.py
+│   │   ├── market_correlation.py  # Linked Fate engine (v4)
 │   │   └── spatial.py
 │   ├── api/                    # Optional FastAPI backend
 │   │   └── routes.py
@@ -623,6 +741,7 @@ Texas is the ideal "Ground Zero" for the MVP:
 | `WATR` | P0 | USGS NWIS | Slow-moving, high-impact spatial data |
 | `FLOW` | P0 | Simulated AIS / Port Stats | Logistics chokepoint monitoring |
 | `FIN` | P1 | yfinance (Phase 3) | Market correlation with physical events |
+| `NEWS` | P1 | Google News RSS (Phase 4) | News sentiment analysis |
 
 ### 9.2.1 FLOW Function Code (Phase 2)
 
@@ -674,6 +793,43 @@ Texas is the ideal "Ground Zero" for the MVP:
 | `/finance/quotes` | GET | Current watchlist quotes |
 | `/finance/history/{symbol}` | GET | Historical price data for sparklines |
 | `/finance/summary` | GET | Full summary with physical correlation |
+
+### 9.2.3 NEWS Function Code (Phase 4)
+
+**Command:** `NEWS US-TX <GO>` — Texas Node News Sentiment Analysis
+
+**Data Strategy:** Uses free Google News RSS feeds with local NLTK VADER sentiment scoring.
+No API keys or paid services required.
+
+**News Categories:**
+| Category | Query Keywords | Related Stocks |
+|----------|----------------|----------------|
+| `GRID` | ERCOT, Texas power grid, Texas blackout | VST, NRG |
+| `WATER` | Texas drought, Texas aquifer | TXN |
+| `LOGISTICS` | Port of Houston, Houston Ship Channel | TXN |
+| `EQUITY` | Vistra Energy, NRG Energy, Texas Instruments | VST, NRG, TXN |
+
+**NLP Library:** NLTK VADER (Valence Aware Dictionary and sEntiment Reasoner)
+- Specifically designed for social media and news sentiment
+- Works well with short text (headlines)
+- No training required, uses pre-built lexicon
+- Returns compound score (-1 to 1) plus pos/neg/neu breakdown
+
+**UI Layout:** Dense scrolling list of headlines
+- Color-coded by sentiment (Green: positive, Yellow: neutral, Red: negative)
+- Category breakdown with aggregate sentiment scores
+- Sentiment indicators: ▲▲ (very positive), ▲ (positive), ● (neutral), ▼ (negative), ▼▼ (very negative)
+
+**Ticker Tray Integration:**
+- Critical (very negative) headlines appear in ticker tray
+- Overall news sentiment indicator shown below alerts
+
+**API Endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/news/headlines` | GET | All headlines with sentiment scores |
+| `/news/summary` | GET | Aggregated summary with category breakdown |
+| `/news/sentiment/{category}` | GET | Quick sentiment for correlation engine |
 
 ### 9.3 Architecture Decisions
 

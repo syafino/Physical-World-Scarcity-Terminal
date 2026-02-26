@@ -225,6 +225,10 @@ def execute_command(request: CommandRequest, db: Session = Depends(get_db)):
             data, anomalies = execute_risk(db, region_code)
         elif function_code == "FIN":
             data, anomalies = execute_fin(db, region_code)
+        elif function_code == "NEWS":
+            data, anomalies = execute_news(db, region_code)
+        elif function_code == "WX":
+            data, anomalies = execute_wx(db, region_code)
         else:
             return CommandResponse(
                 success=False,
@@ -770,6 +774,178 @@ def execute_fin(db: Session, region_code: str) -> tuple[list, list]:
     return data, market_alerts
 
 
+def execute_news(db: Session, region_code: str) -> tuple[list, list]:
+    """
+    Execute NEWS command - news headlines with sentiment analysis.
+    
+    Fetches RSS feeds for Texas Node keywords and scores sentiment
+    using NLTK VADER. Part of Phase 4: Unstructured Data Layer.
+    
+    Args:
+        db: Database session
+        region_code: Region code (used to filter relevant categories)
+        
+    Returns:
+        Tuple of (headlines_data, critical_headlines)
+    """
+    from src.ingestion.news import get_news_summary, TEXAS_NODE_QUERIES
+    
+    # Fetch and score news
+    news_data = get_news_summary()
+    
+    headlines = news_data["headlines"]
+    summaries = news_data["summaries"]
+    critical = news_data["critical_headlines"]
+    
+    # Format headlines for UI
+    data = []
+    
+    for h in headlines[:50]:  # Limit to 50 headlines
+        data.append({
+            "title": h.title,
+            "source": h.source,
+            "url": h.url,
+            "published_at": h.published_at.isoformat() if h.published_at else None,
+            "category": h.query_category,
+            "query_term": h.query_term,
+            "sentiment_score": h.compound_score,
+            "sentiment_label": h.sentiment_label,
+            "positive_score": h.positive_score,
+            "negative_score": h.negative_score,
+            "neutral_score": h.neutral_score,
+        })
+    
+    # Add summary as first record for UI consumption
+    if data:
+        data[0]["_summary"] = {
+            "total_headlines": news_data["total_count"],
+            "overall_sentiment": news_data["overall_sentiment"],
+            "fetched_at": news_data["fetched_at"].isoformat(),
+            "categories": {
+                cat: {
+                    "count": s.headline_count,
+                    "avg_sentiment": s.avg_sentiment,
+                    "negative_count": s.negative_count,
+                    "positive_count": s.positive_count,
+                }
+                for cat, s in summaries.items()
+            },
+        }
+    
+    # Critical headlines as "anomalies" for ticker tray
+    critical_alerts = []
+    for h in critical[:10]:
+        critical_alerts.append({
+            "title": h.title,
+            "source": h.source,
+            "sentiment_score": h.compound_score,
+            "category": h.query_category,
+            "published_at": h.published_at.isoformat() if h.published_at else None,
+            "url": h.url,
+            "type": "NEGATIVE_SENTIMENT",
+            "severity": abs(h.compound_score),
+        })
+    
+    return data, critical_alerts
+
+
+def execute_wx(db: Session, region_code: str) -> tuple[list, list]:
+    """
+    Execute WX command - weather forecasts for predictive analysis.
+    
+    Fetches 7-day weather forecasts from NWS API for key Texas locations.
+    Part of Phase 5: The Predictive Layer.
+    
+    Args:
+        db: Database session
+        region_code: Region code (used to select forecast locations)
+        
+    Returns:
+        Tuple of (forecast_data, predictive_alerts)
+    """
+    from src.ingestion.weather import (
+        get_weather_summary,
+        get_predictive_alerts,
+        TEXAS_FORECAST_LOCATIONS,
+        TEMPERATURE_THRESHOLDS,
+    )
+    
+    # Fetch weather summary
+    weather_data = get_weather_summary()
+    
+    forecasts = weather_data.get("forecasts", {})
+    alerts = weather_data.get("alerts", [])
+    critical_alerts = weather_data.get("critical_alerts", [])
+    danger = weather_data.get("danger_assessment", {})
+    
+    # Format forecast data for UI
+    data = []
+    
+    for loc_key, forecast in forecasts.items():
+        loc_info = TEXAS_FORECAST_LOCATIONS.get(loc_key, {})
+        loc_danger = danger.get("locations", {}).get(loc_key, {})
+        
+        # Build forecast record
+        record = {
+            "location_key": loc_key,
+            "location_name": forecast.get("location_name"),
+            "latitude": forecast.get("latitude"),
+            "longitude": forecast.get("longitude"),
+            "grid_id": forecast.get("grid_id"),
+            "purpose": loc_info.get("purpose"),
+            "grid_relevance": loc_info.get("grid_relevance"),
+            # Stats
+            "max_temp_48h": forecast.get("stats", {}).get("max_temp_48h"),
+            "min_temp_48h": forecast.get("stats", {}).get("min_temp_48h"),
+            "max_temp_7d": forecast.get("stats", {}).get("max_temp_7d"),
+            "min_temp_7d": forecast.get("stats", {}).get("min_temp_7d"),
+            # Danger assessment
+            "heat_risk": loc_danger.get("heat_risk", "NONE"),
+            "freeze_risk": loc_danger.get("freeze_risk", "NONE"),
+            "grid_strain_prediction": loc_danger.get("grid_strain_prediction", "NORMAL"),
+            # Forecast periods (7-day)
+            "periods": forecast.get("periods", [])[:14],
+            # Hourly for charts
+            "hourly": forecast.get("hourly", [])[:72],  # 3 days hourly
+            "fetched_at": forecast.get("fetched_at"),
+        }
+        data.append(record)
+    
+    # Add summary as first record metadata
+    if data:
+        data[0]["_summary"] = {
+            "overall_heat_risk": danger.get("overall", {}).get("heat_risk", "NONE"),
+            "overall_freeze_risk": danger.get("overall", {}).get("freeze_risk", "NONE"),
+            "overall_grid_strain": danger.get("overall", {}).get("grid_strain_prediction", "NORMAL"),
+            "active_alerts": len(alerts),
+            "critical_alerts": len(critical_alerts),
+            "thresholds": TEMPERATURE_THRESHOLDS,
+            "fetched_at": weather_data.get("fetched_at"),
+        }
+        # Include NWS alerts for display
+        data[0]["_nws_alerts"] = critical_alerts[:5]
+    
+    # Get predictive alerts for ticker tray
+    predictive_alerts = get_predictive_alerts()
+    
+    # Format as anomaly-style alerts
+    formatted_alerts = []
+    for alert in predictive_alerts:
+        formatted_alerts.append({
+            "type": "PREDICTIVE",
+            "category": alert.get("category"),
+            "level": alert.get("level"),
+            "title": alert.get("title"),
+            "message": alert.get("message"),
+            "location": alert.get("location"),
+            "temperature": alert.get("temperature"),
+            "risk_type": alert.get("risk_type"),
+            "severity": 1.0 if alert.get("level") == "CRITICAL" else 0.7,
+        })
+    
+    return data, formatted_alerts
+
+
 # ─────────────────────────────────────────────────────────────
 # Data Query Endpoints
 # ─────────────────────────────────────────────────────────────
@@ -1166,3 +1342,282 @@ def get_finance_summary(
         correlations=correlations,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
+
+
+# ─────────────────────────────────────────────────────────────
+# News & Sentiment Endpoints (Phase 4)
+# ─────────────────────────────────────────────────────────────
+
+
+@app.get("/news/headlines", tags=["News"])
+def get_news_headlines(
+    category: Optional[str] = Query(None, description="Filter by category: GRID, WATER, LOGISTICS, EQUITY"),
+    limit: int = Query(50, description="Maximum headlines to return"),
+):
+    """
+    Get news headlines with sentiment scores.
+    
+    Fetches from Google News RSS for Texas Node keywords and scores
+    sentiment locally using NLTK VADER.
+    """
+    from src.ingestion.news import fetch_all_news, fetch_news_by_category
+    
+    if category:
+        headlines = fetch_news_by_category(category.upper(), max_per_query=10)
+    else:
+        headlines = fetch_all_news(max_per_query=5)
+    
+    return {
+        "status": "success",
+        "headlines": [
+            {
+                "title": h.title,
+                "source": h.source,
+                "url": h.url,
+                "published_at": h.published_at.isoformat() if h.published_at else None,
+                "category": h.query_category,
+                "query_term": h.query_term,
+                "sentiment": {
+                    "compound": h.compound_score,
+                    "label": h.sentiment_label,
+                    "positive": h.positive_score,
+                    "negative": h.negative_score,
+                    "neutral": h.neutral_score,
+                },
+            }
+            for h in headlines[:limit]
+        ],
+        "count": len(headlines[:limit]),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/news/summary", tags=["News"])
+def get_news_summary_endpoint():
+    """
+    Get aggregated news summary with category breakdowns.
+    
+    Includes overall sentiment, category-level stats, and critical headlines.
+    """
+    from src.ingestion.news import get_news_summary
+    
+    summary = get_news_summary()
+    
+    return {
+        "status": "success",
+        "overall_sentiment": summary["overall_sentiment"],
+        "total_headlines": summary["total_count"],
+        "critical_count": len(summary["critical_headlines"]),
+        "categories": {
+            cat: {
+                "headline_count": s.headline_count,
+                "avg_sentiment": s.avg_sentiment,
+                "negative_count": s.negative_count,
+                "positive_count": s.positive_count,
+                "most_negative": {
+                    "title": s.most_negative.title,
+                    "score": s.most_negative.compound_score,
+                } if s.most_negative else None,
+                "most_positive": {
+                    "title": s.most_positive.title,
+                    "score": s.most_positive.compound_score,
+                } if s.most_positive else None,
+            }
+            for cat, s in summary["summaries"].items()
+        },
+        "critical_headlines": [
+            {
+                "title": h.title,
+                "source": h.source,
+                "category": h.query_category,
+                "sentiment_score": h.compound_score,
+            }
+            for h in summary["critical_headlines"][:5]
+        ],
+        "fetched_at": summary["fetched_at"].isoformat(),
+    }
+
+
+@app.get("/news/sentiment/{category}", tags=["News"])
+def get_category_sentiment(
+    category: str,
+):
+    """
+    Get sentiment score for a specific category.
+    
+    Used by Linked Fate v3 for correlation checks.
+    Categories: GRID, WATER, LOGISTICS, EQUITY
+    """
+    from src.ingestion.news import get_sentiment_for_correlation
+    
+    valid_categories = ["GRID", "WATER", "LOGISTICS", "EQUITY"]
+    category = category.upper()
+    
+    if category not in valid_categories:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid category. Must be one of: {valid_categories}",
+        )
+    
+    sentiment = get_sentiment_for_correlation(category)
+    
+    # Determine label
+    if sentiment <= -0.5:
+        label = "VERY_NEGATIVE"
+    elif sentiment <= -0.05:
+        label = "NEGATIVE"
+    elif sentiment < 0.05:
+        label = "NEUTRAL"
+    elif sentiment < 0.5:
+        label = "POSITIVE"
+    else:
+        label = "VERY_POSITIVE"
+    
+    return {
+        "category": category,
+        "sentiment_score": sentiment,
+        "sentiment_label": label,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# Weather & Forecast Endpoints (Phase 5)
+# ─────────────────────────────────────────────────────────────
+
+
+@app.get("/weather/forecast", tags=["Weather"])
+def get_weather_forecast(
+    location: Optional[str] = Query(None, description="Location key: DALLAS, HOUSTON, AUSTIN, SAN_ANTONIO"),
+):
+    """
+    Get 7-day weather forecast for Texas locations.
+    
+    Fetches from NWS API for key Texas cities used in predictive analysis.
+    Includes temperature danger zone assessment for grid strain prediction.
+    """
+    from src.ingestion.weather import (
+        fetch_location_forecast,
+        fetch_all_texas_forecasts,
+        TEXAS_FORECAST_LOCATIONS,
+    )
+    
+    if location:
+        location = location.upper()
+        if location not in TEXAS_FORECAST_LOCATIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid location. Must be one of: {list(TEXAS_FORECAST_LOCATIONS.keys())}",
+            )
+        forecast = fetch_location_forecast(location)
+        if not forecast:
+            raise HTTPException(status_code=503, detail="Unable to fetch forecast from NWS")
+        forecasts = {location: forecast.to_dict()}
+    else:
+        forecasts_obj = fetch_all_texas_forecasts()
+        forecasts = {k: v.to_dict() for k, v in forecasts_obj.items()}
+    
+    return {
+        "status": "success",
+        "forecasts": forecasts,
+        "locations_available": list(TEXAS_FORECAST_LOCATIONS.keys()),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/weather/alerts", tags=["Weather"])
+def get_weather_alerts(
+    state: str = Query("TX", description="State code (default: TX)"),
+    critical_only: bool = Query(False, description="Only return critical alerts"),
+):
+    """
+    Get active weather alerts from NWS.
+    
+    Returns alerts that may impact physical systems (grid, port, water).
+    """
+    from src.ingestion.weather import fetch_alerts
+    
+    alerts = fetch_alerts(state.upper())
+    
+    if critical_only:
+        alerts = [a for a in alerts if a.is_critical]
+    
+    return {
+        "status": "success",
+        "alerts": [a.to_dict() for a in alerts],
+        "count": len(alerts),
+        "critical_count": sum(1 for a in alerts if a.is_critical),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/weather/danger", tags=["Weather"])
+def get_weather_danger_assessment():
+    """
+    Get temperature danger zone assessment.
+    
+    Analyzes forecasts for grid strain prediction based on:
+    - Extreme heat (>100°F): Extreme grid strain
+    - High heat (>98°F): High grid strain danger zone
+    - Hard freeze (<25°F): Severe freeze risk (2021 crisis level)
+    - Freeze (<32°F): Freeze risk
+    
+    Used by Linked Fate v4 for predictive correlation.
+    """
+    from src.ingestion.weather import (
+        fetch_all_texas_forecasts,
+        assess_temperature_danger,
+        TEMPERATURE_THRESHOLDS,
+    )
+    
+    forecasts = fetch_all_texas_forecasts()
+    danger = assess_temperature_danger(forecasts)
+    
+    return {
+        "status": "success",
+        "danger_assessment": danger,
+        "thresholds": TEMPERATURE_THRESHOLDS,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/weather/predictive-alerts", tags=["Weather"])
+def get_predictive_alerts_endpoint():
+    """
+    Get predictive alerts based on weather forecasts.
+    
+    Generates anticipatory alerts for:
+    - Extreme grid strain (high temps in 48h)
+    - Freeze emergencies (low temps in 48h)
+    - Port disruptions (hurricane/storm warnings)
+    
+    Used by ticker tray for [PREDICTIVE] alert display.
+    """
+    from src.ingestion.weather import get_predictive_alerts
+    
+    alerts = get_predictive_alerts()
+    
+    return {
+        "status": "success",
+        "predictive_alerts": alerts,
+        "count": len(alerts),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/weather/summary", tags=["Weather"])
+def get_weather_summary_endpoint():
+    """
+    Get complete weather summary for Texas.
+    
+    Includes forecasts, alerts, and danger assessments aggregated
+    for terminal display.
+    """
+    from src.ingestion.weather import get_weather_summary
+    
+    summary = get_weather_summary()
+    
+    return {
+        "status": "success",
+        **summary,
+    }

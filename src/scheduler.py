@@ -74,6 +74,24 @@ app.conf.beat_schedule = {
         "schedule": crontab(minute="*/5"),  # Every 5 minutes
         "options": {"queue": "analysis"},
     },
+    # Fetch news and score sentiment every 15 minutes (Phase 4)
+    "fetch-news-15m": {
+        "task": "src.ingestion.scheduler.fetch_news_sentiment",
+        "schedule": crontab(minute="*/15"),  # Every 15 minutes
+        "options": {"queue": "ingestion"},
+    },
+    # Fetch weather forecasts every 2 hours (Phase 5 - Predictive Layer)
+    "fetch-weather-2h": {
+        "task": "src.ingestion.scheduler.fetch_weather_forecast",
+        "schedule": crontab(minute=0, hour="*/2"),  # Every 2 hours at :00
+        "options": {"queue": "ingestion"},
+    },
+    # Evaluate predictive correlations every 15 minutes (Phase 5 - Linked Fate v4)
+    "evaluate-predictive-15m": {
+        "task": "src.ingestion.scheduler.evaluate_predictive_correlation",
+        "schedule": crontab(minute="*/15"),  # Every 15 minutes
+        "options": {"queue": "analysis"},
+    },
 }
 
 
@@ -211,6 +229,90 @@ def evaluate_market_correlation(self):
         return result
     except Exception as e:
         self.retry(exc=e, countdown=30, max_retries=3)
+
+
+@app.task(bind=True, name="src.ingestion.scheduler.fetch_news_sentiment")
+def fetch_news_sentiment(self):
+    """
+    Celery task to fetch news headlines and score sentiment (Linked Fate v3).
+    
+    Phase 4: Unstructured data layer.
+    Fetches Google News RSS for Texas Node keywords and scores
+    sentiment locally using NLTK VADER.
+    
+    Returns:
+        Dict with news summary
+    """
+    from src.ingestion.news import get_news_summary
+
+    try:
+        result = get_news_summary()
+        return {
+            "status": "completed",
+            "total_headlines": result["total_count"],
+            "overall_sentiment": result["overall_sentiment"],
+            "critical_count": len(result["critical_headlines"]),
+            "fetched_at": result["fetched_at"].isoformat(),
+        }
+    except Exception as e:
+        self.retry(exc=e, countdown=60, max_retries=3)
+
+
+@app.task(bind=True, name="src.ingestion.scheduler.fetch_weather_forecast")
+def fetch_weather_forecast(self):
+    """
+    Celery task to fetch weather forecasts from NWS API (Linked Fate v4).
+    
+    Phase 5: Predictive layer.
+    Fetches 7-day forecasts for key Texas locations and assesses
+    temperature danger zones for grid strain prediction.
+    
+    Returns:
+        Dict with weather fetch summary
+    """
+    from src.ingestion.weather import get_weather_summary
+
+    try:
+        summary = get_weather_summary()
+        danger = summary.get("danger_assessment", {}).get("overall", {})
+        
+        return {
+            "status": "completed",
+            "forecasts_fetched": len(summary.get("forecasts", {})),
+            "alerts_count": len(summary.get("alerts", [])),
+            "critical_alerts": len(summary.get("critical_alerts", [])),
+            "grid_strain_prediction": danger.get("grid_strain_prediction", "NORMAL"),
+            "heat_risk": danger.get("heat_risk", "NONE"),
+            "freeze_risk": danger.get("freeze_risk", "NONE"),
+            "fetched_at": summary.get("fetched_at"),
+        }
+    except Exception as e:
+        self.retry(exc=e, countdown=120, max_retries=2)
+
+
+@app.task(bind=True, name="src.ingestion.scheduler.evaluate_predictive_correlation")
+def evaluate_predictive_correlation(self):
+    """
+    Celery task to evaluate predictive weather-physical correlations (Linked Fate v4).
+    
+    Cross-references weather forecasts with physical system status to generate
+    anticipatory alerts before scarcity events occur.
+    
+    Rules:
+    - IF (Forecast Temp > 100°F in 48h) AND (ERCOT Margin < 10%) -> PREDICTIVE: EXTREME GRID STRAIN
+    - IF (Forecast Temp < 25°F in 48h) -> PREDICTIVE: FREEZE EMERGENCY
+    - IF (Hurricane/Storm Warning for Houston) -> PREDICTIVE: PORT CHOKEPOINT
+    
+    Returns:
+        Dict with predictive correlation analysis results
+    """
+    from src.analysis.market_correlation import evaluate_predictive_correlations
+
+    try:
+        result = evaluate_predictive_correlations()
+        return result
+    except Exception as e:
+        self.retry(exc=e, countdown=60, max_retries=2)
 
 
 @app.task(name="src.ingestion.scheduler.health_check")

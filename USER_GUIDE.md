@@ -1,7 +1,7 @@
 # PWST User Guide
 ## Physical World Scarcity Terminal — Operator Manual
-**Version:** 0.1.0-alpha  
-**Terminal Build:** Pre-Release
+**Version:** 0.5.0-alpha  
+**Terminal Build:** Phase 5 — The Predictive Layer
 
 ---
 
@@ -150,13 +150,18 @@ CORR WATR:AGRI US-CA <GO>      # Water-to-agriculture correlation
 
 **Example:** `MINE COPPER -7d <GO>` — Copper production, weekly
 
-### Weather & Events
+### Weather & Forecasting (Phase 5)
 
 | Code | Name | Description |
 |------|------|-------------|
 | `STRM` | Storms | Active tropical systems, severe weather |
+| `WX` | Weather | NWS forecasts, temperature danger zones, predictive alerts |
 
-**Example:** `STRM ATLANTIC <GO>` — Active Atlantic storm tracking
+**Examples:**
+- `STRM ATLANTIC <GO>` — Active Atlantic storm tracking
+- `WX US-TX <GO>` — Texas weather forecasts and danger zones
+- `WX US-TX -danger <GO>` — Temperature danger thresholds only
+- `WX US-TX -predictive <GO>` — Predictive grid strain alerts
 
 ### Intelligence & Analysis
 
@@ -164,8 +169,13 @@ CORR WATR:AGRI US-CA <GO>      # Water-to-agriculture correlation
 |------|------|-------------|
 | `RISK` | Risk Dashboard | Aggregated anomaly scores, regional risk |
 | `CORR` | Correlation | Cross-indicator statistical relationships |
+| `FIN` | Financial | Market correlation with physical events (Phase 3) |
+| `NEWS` | Sentiment | News sentiment analysis for physical events (Phase 4) |
 
-**Example:** `RISK US-CA <GO>` — Full risk dashboard for California
+**Examples:**
+- `RISK US-CA <GO>` — Full risk dashboard for California
+- `FIN US-TX <GO>` — Texas-related equities correlation view
+- `NEWS US-TX <GO>` — News sentiment for Texas physical events
 
 ---
 
@@ -429,6 +439,58 @@ WATR US-CA -stale <GO>
 
 ---
 
+## 11.5 Predictive Weather Layer (Phase 5)
+
+### Overview
+
+The Predictive Layer anticipates scarcity **before** it occurs by analyzing weather forecasts and correlating them with grid capacity and infrastructure stress patterns.
+
+> "A true physical terminal anticipates scarcity before it happens."
+
+### Temperature Danger Zones
+
+| Threshold | Temperature | Scarcity Impact |
+|-----------|-------------|-----------------|
+| `EXTREME_HEAT` | >100°F | Grid strain imminent, demand spike expected |
+| `HIGH_HEAT` | >98°F | Elevated load, conservation alerts likely |
+| `MODERATE_HEAT` | >95°F | Watch zone, monitor grid margin |
+| `FREEZE_WARNING` | <32°F | Pipe/infrastructure risk, heating demand spike |
+| `HARD_FREEZE` | <25°F | Emergency grid conditions (2021 Texas repeat risk) |
+| `EXTREME_COLD` | <15°F | Critical infrastructure failure risk |
+
+### Predictive Alerts
+
+The ticker tray displays predictive alerts with the `[PREDICTIVE]` prefix:
+
+```
+[PREDICTIVE] GRID STRAIN EXPECTED IN 48H ║ [PREDICTIVE] FREEZE EMERGENCY RISK - FEB 2021 REFERENCE
+```
+
+**Predictive Correlation Rules:**
+- Heat strain forecast: >100°F + low grid margin (<10%) = Imminent strain warning
+- Hard freeze forecast: <25°F within 48h = Emergency grid risk
+- Port storm: Hurricane/tropical storm near Houston = Supply chain disruption
+
+### WX Command Usage
+
+```
+WX US-TX <GO>              # Full Texas weather view with forecasts
+WX US-TX -danger <GO>      # Temperature danger zones only
+WX US-TX -alerts <GO>      # Active NWS weather alerts
+WX US-TX -predictive <GO>  # Predictive scarcity correlations
+WX US-TX -summary <GO>     # 7-day forecast summary
+```
+
+### Data Source
+
+**NWS API** (api.weather.gov)
+- Cost: Free (no API key required)
+- Coverage: United States
+- Update frequency: Every 2 hours
+- Forecast window: 7 days with hourly granularity for first 48h
+
+---
+
 ## 12. Troubleshooting
 
 ### "No Data Available"
@@ -469,9 +531,15 @@ If data appears old:
 | **Baseline** | Rolling 30-day mean used for anomaly detection |
 | **Chokepoint** | Geographic bottleneck in logistics networks |
 | **Correlation** | Statistical measure of relationship between two variables |
+| **Danger Zone** | Temperature threshold indicating scarcity risk (e.g., >100°F for grid strain) |
 | **Function Code** | 4-letter identifier for data categories (e.g., WATR, GRID) |
 | **Granger Causality** | Statistical test for predictive relationships |
+| **Grid Margin** | Available spare capacity on electrical grid (low margin = strain risk) |
+| **Hard Freeze** | Temperature <25°F creating emergency grid conditions |
+| **Linked Fate** | Correlation rules connecting physical events to economic impacts |
 | **NDVI** | Normalized Difference Vegetation Index (crop health metric) |
+| **NWS** | National Weather Service (api.weather.gov) |
+| **Predictive Alert** | Forward-looking warning based on forecast + correlation analysis |
 | **σ (Sigma)** | Standard deviation; measure of statistical dispersion |
 | **Z-Score** | Number of standard deviations from the mean |
 

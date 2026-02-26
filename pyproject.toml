@@ -43,6 +43,9 @@ dependencies = [
     "scipy>=1.11.0",
     "statsmodels>=0.14.0",
     
+    # Financial Data
+    "yfinance>=0.2.36",
+    
     # UI
     "streamlit>=1.30.0",
     "pydeck>=0.8.0",

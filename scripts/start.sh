@@ -72,6 +72,14 @@ case "$ACTION" in
             echo "  Waiting... ($i/30)"
         done
         
+        # Initial data fetch
+        echo ""
+        echo -e "${BLUE}▶ Fetching initial data...${NC}"
+        docker-compose exec -T worker celery -A src.scheduler call src.ingestion.scheduler.fetch_usgs_water > /dev/null 2>&1 &
+        docker-compose exec -T worker celery -A src.scheduler call src.ingestion.scheduler.fetch_ercot_data > /dev/null 2>&1 &
+        docker-compose exec -T worker celery -A src.scheduler call src.ingestion.scheduler.fetch_port_data > /dev/null 2>&1 &
+        echo -e "${GREEN}✓ Data fetch tasks queued (WATR, GRID, PORT)${NC}"
+        
         echo ""
         echo "  Try these commands in the terminal:"
         echo "    WATR US-TX <GO>"

@@ -117,6 +117,37 @@ class AlertResponse(BaseModel):
     is_active: bool
 
 
+class StockQuoteResponse(BaseModel):
+    """Stock quote for financial data."""
+
+    symbol: str
+    name: str
+    price: float
+    change: float
+    change_percent: float
+    volume: int
+    market_cap: Optional[float]
+    day_high: float
+    day_low: float
+    open: float
+    prev_close: float
+    timestamp: str
+    metadata: dict[str, Any]
+
+
+class MarketSummaryResponse(BaseModel):
+    """Market summary for FIN command."""
+
+    status: str
+    quotes: list[dict[str, Any]]
+    histories: Optional[dict[str, Any]]
+    aggregate: dict[str, Any]
+    significant_moves: list[dict[str, Any]]
+    physical_status: Optional[dict[str, Any]]
+    correlations: Optional[list[dict[str, Any]]]
+    timestamp: str
+
+
 # ─────────────────────────────────────────────────────────────
 # Health Endpoints
 # ─────────────────────────────────────────────────────────────
@@ -192,6 +223,8 @@ def execute_command(request: CommandRequest, db: Session = Depends(get_db)):
             data, anomalies = execute_flow(db, region_code)
         elif function_code == "RISK":
             data, anomalies = execute_risk(db, region_code)
+        elif function_code == "FIN":
+            data, anomalies = execute_fin(db, region_code)
         else:
             return CommandResponse(
                 success=False,
@@ -617,6 +650,126 @@ def execute_risk(db: Session, region_code: str) -> tuple[list, list]:
     return data, anomaly_list
 
 
+def execute_fin(db: Session, region_code: str) -> tuple[list, list]:
+    """
+    Execute FIN command - financial market correlation view.
+    
+    Fetches Texas proxy watchlist data and correlates with physical alerts.
+    
+    Args:
+        db: Database session
+        region_code: Region code (US-TX for Texas proxy watchlist)
+        
+    Returns:
+        Tuple of (market_data, market_alerts)
+    """
+    from src.ingestion.finance import (
+        fetch_watchlist_quotes,
+        detect_significant_moves,
+        fetch_all_watchlist_history,
+        TEXAS_PROXY_WATCHLIST,
+    )
+    
+    # Fetch current quotes
+    quotes = fetch_watchlist_quotes()
+    
+    # Fetch historical data for sparklines
+    histories = fetch_all_watchlist_history(period="5d")
+    
+    # Detect significant moves
+    significant_moves = detect_significant_moves(quotes)
+    
+    # Get current physical alerts for correlation
+    active_alerts = (
+        db.query(Alert)
+        .filter(Alert.is_active == True)
+        .filter(Alert.alert_level.in_(["WARNING", "CRITICAL"]))
+        .order_by(Alert.triggered_at.desc())
+        .limit(10)
+        .all()
+    )
+    
+    # Build physical status summary
+    physical_status = {
+        "grid": "NORMAL",
+        "water": "NORMAL",
+        "port": "NORMAL",
+    }
+    
+    for alert in active_alerts:
+        if alert.alert_type == "GRID":
+            physical_status["grid"] = alert.alert_level
+        elif alert.alert_type == "WATR":
+            physical_status["water"] = alert.alert_level
+        elif alert.alert_type == "FLOW":
+            physical_status["port"] = alert.alert_level
+        elif alert.alert_type == "LINKED":
+            # Linked alerts affect all
+            physical_status["grid"] = max(physical_status["grid"], alert.alert_level, key=lambda x: {"NORMAL": 0, "WATCH": 1, "WARNING": 2, "CRITICAL": 3}.get(x, 0))
+    
+    # Build market data response
+    data = []
+    
+    for quote in quotes:
+        quote_dict = quote.to_dict()
+        
+        # Add sparkline data if available
+        history = histories.get(quote.symbol)
+        if history:
+            quote_dict["sparkline"] = history.prices[-24:]  # Last 24 data points
+            quote_dict["sparkline_dates"] = history.dates[-24:]
+        
+        # Add Texas exposure info
+        watchlist_info = TEXAS_PROXY_WATCHLIST.get(quote.symbol, {})
+        quote_dict["texas_exposure"] = watchlist_info.get("exposure")
+        quote_dict["physical_link"] = watchlist_info.get("physical_link")
+        quote_dict["sensitivity"] = watchlist_info.get("sensitivity")
+        
+        data.append(quote_dict)
+    
+    # Market alerts (significant moves that may correlate with physical events)
+    market_alerts = []
+    
+    for move in significant_moves:
+        physical_link = move.get("physical_link", "").split(",")
+        
+        # Check if any linked physical systems have alerts
+        correlation_detected = False
+        correlated_alert = None
+        
+        for link in physical_link:
+            link = link.strip()
+            if link == "GRID" and physical_status["grid"] in ["WARNING", "CRITICAL"]:
+                correlation_detected = True
+                correlated_alert = f"GRID {physical_status['grid']}"
+            elif link == "WATR" and physical_status["water"] in ["WARNING", "CRITICAL"]:
+                correlation_detected = True
+                correlated_alert = f"WATER {physical_status['water']}"
+            elif link == "FLOW" and physical_status["port"] in ["WARNING", "CRITICAL"]:
+                correlation_detected = True
+                correlated_alert = f"PORT {physical_status['port']}"
+        
+        alert_entry = {
+            "symbol": move["symbol"],
+            "name": move["name"],
+            "move_type": move["move_type"],
+            "direction": move["direction"],
+            "change_percent": move["change_percent"],
+            "physical_link": move.get("physical_link"),
+            "correlation_detected": correlation_detected,
+            "correlated_alert": correlated_alert,
+            "timestamp": move["timestamp"],
+        }
+        market_alerts.append(alert_entry)
+    
+    # Add physical status to first data record for UI consumption
+    if data:
+        data[0]["physical_status"] = physical_status
+        data[0]["total_alerts"] = len(active_alerts)
+    
+    return data, market_alerts
+
+
 # ─────────────────────────────────────────────────────────────
 # Data Query Endpoints
 # ─────────────────────────────────────────────────────────────
@@ -841,3 +994,175 @@ def acknowledge_alert(
     db.commit()
     
     return {"status": "acknowledged", "alert_id": alert_id}
+
+
+# ─────────────────────────────────────────────────────────────
+# Financial Data Endpoints (Phase 3)
+# ─────────────────────────────────────────────────────────────
+
+
+@app.get("/finance/quotes", tags=["Finance"])
+def get_finance_quotes(
+    symbols: Optional[str] = Query(None, description="Comma-separated symbols (default: Texas watchlist)"),
+):
+    """
+    Get current stock quotes for Texas proxy watchlist.
+    
+    Default watchlist: VST (Vistra), NRG (NRG Energy), TXN (Texas Instruments)
+    """
+    from src.ingestion.finance import fetch_watchlist_quotes, TEXAS_PROXY_WATCHLIST
+    
+    symbol_list = None
+    if symbols:
+        symbol_list = [s.strip().upper() for s in symbols.split(",")]
+    
+    quotes = fetch_watchlist_quotes(symbol_list)
+    
+    return {
+        "status": "success",
+        "quotes": [q.to_dict() for q in quotes],
+        "watchlist_info": TEXAS_PROXY_WATCHLIST,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/finance/history/{symbol}", tags=["Finance"])
+def get_finance_history(
+    symbol: str,
+    period: str = Query("5d", description="Period: 1d, 5d, 1mo, 3mo, 6mo, 1y"),
+    interval: str = Query("1h", description="Interval: 1m, 5m, 15m, 1h, 1d"),
+):
+    """
+    Get historical price data for a symbol.
+    
+    Used for sparkline and chart rendering.
+    """
+    from src.ingestion.finance import fetch_stock_history
+    
+    history = fetch_stock_history(symbol.upper(), period=period, interval=interval)
+    
+    if not history:
+        raise HTTPException(status_code=404, detail=f"No history found for {symbol}")
+    
+    return {
+        "status": "success",
+        "symbol": symbol.upper(),
+        "period": period,
+        "interval": interval,
+        "prices": history.prices,
+        "dates": history.dates,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/finance/summary", response_model=MarketSummaryResponse, tags=["Finance"])
+def get_finance_summary(
+    include_physical: bool = Query(True, description="Include physical alert status"),
+    db: Session = Depends(get_db),
+):
+    """
+    Get full market summary with physical correlation.
+    
+    Returns:
+    - Current quotes for Texas proxy watchlist
+    - Historical data for sparklines
+    - Significant market moves
+    - Physical alert status (Grid/Water/Port)
+    - Detected correlations between market moves and physical events
+    """
+    from src.ingestion.finance import (
+        fetch_watchlist_quotes,
+        fetch_all_watchlist_history,
+        detect_significant_moves,
+        TEXAS_PROXY_WATCHLIST,
+    )
+    
+    # Fetch market data
+    quotes = fetch_watchlist_quotes()
+    histories = fetch_all_watchlist_history(period="5d")
+    significant_moves = detect_significant_moves(quotes)
+    
+    # Calculate aggregates
+    if quotes:
+        total_market_cap = sum(q.market_cap or 0 for q in quotes)
+        avg_change = sum(q.change_percent for q in quotes) / len(quotes)
+        aggregate = {
+            "total_market_cap": total_market_cap,
+            "avg_change_percent": avg_change,
+            "symbols_up": sum(1 for q in quotes if q.change_percent > 0),
+            "symbols_down": sum(1 for q in quotes if q.change_percent < 0),
+        }
+    else:
+        aggregate = {}
+    
+    # Get physical status if requested
+    physical_status = None
+    correlations = None
+    
+    if include_physical:
+        # Get active physical alerts
+        active_alerts = (
+            db.query(Alert)
+            .filter(Alert.is_active == True)
+            .filter(Alert.alert_level.in_(["WARNING", "CRITICAL"]))
+            .order_by(Alert.triggered_at.desc())
+            .limit(10)
+            .all()
+        )
+        
+        physical_status = {
+            "grid": {"status": "NORMAL", "alerts": []},
+            "water": {"status": "NORMAL", "alerts": []},
+            "port": {"status": "NORMAL", "alerts": []},
+        }
+        
+        for alert in active_alerts:
+            alert_info = {
+                "title": alert.title,
+                "level": alert.alert_level,
+                "message": alert.message,
+            }
+            if alert.alert_type == "GRID":
+                physical_status["grid"]["status"] = alert.alert_level
+                physical_status["grid"]["alerts"].append(alert_info)
+            elif alert.alert_type == "WATR":
+                physical_status["water"]["status"] = alert.alert_level
+                physical_status["water"]["alerts"].append(alert_info)
+            elif alert.alert_type == "FLOW":
+                physical_status["port"]["status"] = alert.alert_level
+                physical_status["port"]["alerts"].append(alert_info)
+        
+        # Check for market-physical correlations
+        correlations = []
+        for move in significant_moves:
+            physical_link = move.get("physical_link", "").split(",")
+            
+            for link in physical_link:
+                link = link.strip()
+                if link == "GRID" and physical_status["grid"]["status"] in ["WARNING", "CRITICAL"]:
+                    correlations.append({
+                        "symbol": move["symbol"],
+                        "market_move": f"{move['direction']} {abs(move['change_percent']):.1f}%",
+                        "physical_event": f"GRID {physical_status['grid']['status']}",
+                        "correlation_type": "ENERGY_STRAIN",
+                        "confidence": "high" if move["move_type"] == "MAJOR" else "medium",
+                    })
+                elif link == "WATR" and physical_status["water"]["status"] in ["WARNING", "CRITICAL"]:
+                    correlations.append({
+                        "symbol": move["symbol"],
+                        "market_move": f"{move['direction']} {abs(move['change_percent']):.1f}%",
+                        "physical_event": f"WATER {physical_status['water']['status']}",
+                        "correlation_type": "WATER_STRESS",
+                        "confidence": "medium",
+                    })
+    
+    return MarketSummaryResponse(
+        status="active" if quotes else "unavailable",
+        quotes=[q.to_dict() for q in quotes],
+        histories={k: v.to_dict() for k, v in histories.items()} if histories else None,
+        aggregate=aggregate,
+        significant_moves=significant_moves,
+        physical_status=physical_status,
+        correlations=correlations,
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )

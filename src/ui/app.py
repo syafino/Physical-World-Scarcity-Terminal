@@ -242,6 +242,24 @@ def execute_command(command: str) -> dict[str, Any]:
         }
 
 
+def fetch_finance_summary(include_physical: bool = True) -> dict[str, Any]:
+    """Fetch financial market summary from the API."""
+    try:
+        response = httpx.get(
+            f"{API_URL}/finance/summary",
+            params={"include_physical": include_physical},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"API Error: {str(e)}",
+            "quotes": [],
+        }
+
+
 def fetch_alerts(active_only: bool = True, limit: int = 50) -> list[dict]:
     """Fetch risk alerts from the API."""
     try:
@@ -401,6 +419,7 @@ def render_data_panel(data: Optional[list[dict]], function_code: Optional[str]):
                 <p style="color: #6E7681; margin-top: 10px;">Examples:</p>
                 <p style="color: #00FF00;">WATR US-TX &lt;GO&gt;</p>
                 <p style="color: #00FF00;">GRID ERCOT &lt;GO&gt;</p>
+                <p style="color: #00FF00;">FIN US-TX &lt;GO&gt;</p>
                 <p style="color: #00FF00;">RISK US-TX &lt;GO&gt;</p>
             </div>
             """,
@@ -417,6 +436,8 @@ def render_data_panel(data: Optional[list[dict]], function_code: Optional[str]):
         render_flow_data(data)
     elif function_code == "RISK":
         render_risk_data(data)
+    elif function_code == "FIN":
+        render_fin_data(data)
     else:
         # Generic table view
         df = pd.DataFrame(data)
@@ -611,6 +632,163 @@ def render_risk_data(data: list[dict]):
             """,
             unsafe_allow_html=True,
         )
+
+
+def render_fin_data(data: list[dict]):
+    """
+    Render financial data panel with split-screen view.
+    
+    Shows Physical Status (Grid/Water/Port) on left,
+    and Texas Proxy Watchlist sparkline charts on right.
+    """
+    st.markdown("### ▓ FINANCIAL CORRELATION VIEW")
+    st.markdown("*Texas Proxy Watchlist - Market/Physical Intersection*")
+    
+    if not data:
+        st.markdown("*No financial data available*")
+        return
+    
+    # Extract physical status from first record (if present)
+    physical_status = data[0].get("physical_status", {}) if data else {}
+    
+    # Create split-screen layout
+    col_physical, col_market = st.columns([1, 2])
+    
+    # ─────────────────────────────────────────────────────────────
+    # LEFT PANEL: Physical Status
+    # ─────────────────────────────────────────────────────────────
+    with col_physical:
+        st.markdown("#### Physical Status")
+        
+        # Grid status
+        grid_status = physical_status.get("grid", "NORMAL")
+        grid_color = _get_status_color(grid_status)
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #161B22;
+                border-left: 4px solid {grid_color};
+                padding: 8px 12px;
+                margin-bottom: 8px;
+            ">
+                <div style="color: #58A6FF; font-size: 11px;">ERCOT GRID</div>
+                <div style="color: {grid_color}; font-size: 16px; font-weight: bold;">{grid_status}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        
+        # Water status
+        water_status = physical_status.get("water", "NORMAL")
+        water_color = _get_status_color(water_status)
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #161B22;
+                border-left: 4px solid {water_color};
+                padding: 8px 12px;
+                margin-bottom: 8px;
+            ">
+                <div style="color: #58A6FF; font-size: 11px;">TEXAS AQUIFERS</div>
+                <div style="color: {water_color}; font-size: 16px; font-weight: bold;">{water_status}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        
+        # Port status
+        port_status = physical_status.get("port", "NORMAL")
+        port_color = _get_status_color(port_status)
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #161B22;
+                border-left: 4px solid {port_color};
+                padding: 8px 12px;
+                margin-bottom: 8px;
+            ">
+                <div style="color: #58A6FF; font-size: 11px;">PORT OF HOUSTON</div>
+                <div style="color: {port_color}; font-size: 16px; font-weight: bold;">{port_status}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        
+        # Exposure legend
+        st.markdown(
+            """
+            <div style="margin-top: 16px; font-size: 10px; color: #6E7681;">
+                <strong>Symbol Exposure:</strong><br>
+                VST/NRG → GRID<br>
+                TXN → GRID + WATR
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    
+    # ─────────────────────────────────────────────────────────────
+    # RIGHT PANEL: Market Data + Sparklines
+    # ─────────────────────────────────────────────────────────────
+    with col_market:
+        st.markdown("#### Texas Proxy Watchlist")
+        
+        for quote in data:
+            symbol = quote.get("symbol", "UNK")
+            name = quote.get("name", "Unknown")
+            price = quote.get("price", 0)
+            change_pct = quote.get("change_percent", 0)
+            sparkline = quote.get("sparkline", [])
+            physical_link = quote.get("physical_link", "")
+            
+            # Determine color based on change direction
+            change_color = "#00FF00" if change_pct >= 0 else "#FF0000"
+            arrow = "▲" if change_pct >= 0 else "▼"
+            
+            # Create a mini-row for each stock
+            st.markdown(
+                f"""
+                <div style="
+                    background-color: #161B22;
+                    border: 1px solid #30363D;
+                    padding: 12px;
+                    margin-bottom: 8px;
+                    border-radius: 4px;
+                ">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <span style="color: #58A6FF; font-size: 16px; font-weight: bold;">{symbol}</span>
+                            <span style="color: #6E7681; font-size: 11px; margin-left: 8px;">{name}</span>
+                            <span style="color: #6E7681; font-size: 10px; margin-left: 8px;">({physical_link})</span>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: #E6EDF3; font-size: 14px;">${price:.2f}</div>
+                            <div style="color: {change_color}; font-size: 12px;">{arrow} {abs(change_pct):.2f}%</div>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            
+            # Render sparkline chart if available
+            if sparkline and len(sparkline) > 1:
+                sparkline_df = pd.DataFrame({"price": sparkline})
+                st.line_chart(
+                    sparkline_df,
+                    use_container_width=True,
+                    height=60,
+                )
+
+
+def _get_status_color(status: str) -> str:
+    """Get color for status level."""
+    colors = {
+        "NORMAL": "#00FF00",
+        "WATCH": "#FFFF00",
+        "WARNING": "#FFA500",
+        "CRITICAL": "#FF0000",
+    }
+    return colors.get(status, "#6E7681")
 
 
 def render_ticker_tray():
@@ -821,9 +999,12 @@ def main():
             | `WATR [region] <GO>` | Groundwater levels |
             | `GRID [region] <GO>` | Power grid status |
             | `FLOW [port] <GO>` | Port/logistics data |
+            | `FIN [region] <GO>` | Financial correlation view (Phase 3) |
             | `RISK [region] <GO>` | Risk dashboard |
             
             **Regions:** `US-TX` (Texas), `ERCOT` (Texas Grid), `HOU` (Port of Houston)
+            
+            **Watchlist:** `VST` (Vistra), `NRG` (NRG Energy), `TXN` (Texas Instruments)
             
             **Keyboard:** Press `Enter` to execute command
             """

@@ -50,6 +50,12 @@ app.conf.beat_schedule = {
         "schedule": crontab(minute="*/15"),  # Every 15 minutes
         "options": {"queue": "ingestion"},
     },
+    # Fetch financial market data every 15 minutes (Phase 3)
+    "fetch-market-data-15m": {
+        "task": "src.ingestion.scheduler.fetch_market_data",
+        "schedule": crontab(minute="*/15"),  # Every 15 minutes during market hours
+        "options": {"queue": "ingestion"},
+    },
     # Run anomaly detection hourly
     "detect-anomalies-hourly": {
         "task": "src.ingestion.scheduler.detect_anomalies",
@@ -59,6 +65,12 @@ app.conf.beat_schedule = {
     # Run risk engine evaluation every 5 minutes
     "evaluate-risk-5m": {
         "task": "src.ingestion.scheduler.evaluate_risk",
+        "schedule": crontab(minute="*/5"),  # Every 5 minutes
+        "options": {"queue": "analysis"},
+    },
+    # Run market correlation check every 5 minutes (Phase 3 - Linked Fate v2)
+    "evaluate-market-correlation-5m": {
+        "task": "src.ingestion.scheduler.evaluate_market_correlation",
         "schedule": crontab(minute="*/5"),  # Every 5 minutes
         "options": {"queue": "analysis"},
     },
@@ -154,6 +166,48 @@ def evaluate_risk(self):
 
     try:
         result = evaluate_all_risks()
+        return result
+    except Exception as e:
+        self.retry(exc=e, countdown=30, max_retries=3)
+
+
+@app.task(bind=True, name="src.ingestion.scheduler.fetch_market_data")
+def fetch_market_data(self):
+    """
+    Celery task to fetch Texas proxy watchlist market data.
+    
+    Phase 3: Financial data integration using yfinance.
+    Fetches quotes for VST, NRG, TXN and caches for analysis.
+    
+    Returns:
+        Dict with fetch summary
+    """
+    from src.ingestion.finance import fetch_and_cache_market_data
+
+    try:
+        result = fetch_and_cache_market_data()
+        return result
+    except Exception as e:
+        self.retry(exc=e, countdown=60, max_retries=3)
+
+
+@app.task(bind=True, name="src.ingestion.scheduler.evaluate_market_correlation")
+def evaluate_market_correlation(self):
+    """
+    Celery task to evaluate market-physical correlations (Linked Fate v2).
+    
+    Cross-references physical alerts with market movements to detect:
+    - MARKET_REACTION: ENERGY_STRAIN (VST/NRG moving with GRID alerts)
+    - MARKET_REACTION: WATER_STRESS (TXN moving with WATR alerts)
+    - MARKET_REACTION: SUPPLY_CHAIN (movement with PORT alerts)
+    
+    Returns:
+        Dict with correlation analysis results
+    """
+    from src.analysis.market_correlation import evaluate_market_correlations
+
+    try:
+        result = evaluate_market_correlations()
         return result
     except Exception as e:
         self.retry(exc=e, countdown=30, max_retries=3)

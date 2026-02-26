@@ -1,8 +1,8 @@
 # PWST Technical Architecture Specification
 ## Physical World Scarcity Terminal — Source of Truth Document
-**Version:** 0.1.0-alpha  
-**Last Updated:** 2026-02-25  
-**Status:** DRAFT — Pre-Implementation
+**Version:** 0.3.0-alpha  
+**Last Updated:** 2026-02-26  
+**Status:** Phase 3 — Financial Intersection
 
 ---
 
@@ -231,6 +231,7 @@ When migrating to Snowflake, leverage:
 | P2 | USDA NASS | Crop statistics | Unlimited | `requests` | ✅ Verified |
 | P3 | MarineTraffic | AIS vessel positions | 100/day free | `requests` | [TO BE VERIFIED] |
 | P3 | UN Comtrade | Trade flows | 100/hr guest | `comtradeapicall` | [TO BE VERIFIED] |
+| P1 | Yahoo Finance | Stock quotes/history | Unlimited | `yfinance` | ✅ Phase 3 |
 
 ### 4.2 Paid Fallback Strategy ($25 Budget)
 
@@ -330,6 +331,7 @@ GRID ERCOT -anomaly <GO>     # Texas grid with anomaly filter
 SHIP SUEZ -48h <GO>          # Suez Canal traffic, last 48 hours
 CORR WATR:AGRI US-CA <GO>    # Correlate water to agriculture
 RISK US-CA <GO>              # Full risk dashboard for region
+FIN US-TX <GO>               # Financial correlation view (Phase 3)
 ```
 
 **Modifiers:**
@@ -463,6 +465,52 @@ RULE: PERFECT_STORM
   THEN severity = CRITICAL, alert = "TEXAS_PERFECT_STORM"
 ```
 
+### 6.4 Linked Fate v2: Financial Correlation (Phase 3)
+
+**Market-Physical Correlation Engine:**
+
+Phase 3 introduces financial data overlays to detect market reactions to physical scarcity events in real-time.
+
+**Data Source:** `yfinance` Python library (free, no API key required)
+
+**Texas Proxy Watchlist:**
+| Symbol | Company | Sector | Physical Exposure |
+|--------|---------|--------|-------------------|
+| `VST` | Vistra Corp | Energy | ERCOT power generation (39GW capacity) |
+| `NRG` | NRG Energy | Energy | Integrated power, retail electricity |
+| `TXN` | Texas Instruments | Technology | Semiconductor fabs (water/power intensive) |
+
+**Correlation Rules:**
+```
+RULE: MARKET_REACTION_ENERGY_STRAIN
+  IF (GRID_STRAIN OR GRID_EMERGENCY is ACTIVE)
+  AND (VST OR NRG moving > 2% today)
+  THEN alert = "MARKET REACTION: ENERGY STRAIN"
+  confidence = HIGH if move > 5%, MEDIUM if move > 2%
+  
+RULE: MARKET_REACTION_WATER_STRESS
+  IF (AQUIFER_CRITICAL OR DROUGHT_RISK is ACTIVE)
+  AND (TXN moving > 2% today)
+  THEN alert = "MARKET REACTION: WATER STRESS"
+  confidence = MEDIUM (TXN has multiple dependencies)
+  
+RULE: MARKET_REACTION_SUPPLY_CHAIN
+  IF (PORT_CONGESTION OR PORT_GRIDLOCK is ACTIVE)
+  AND (relevant stock moving > 2% today)
+  THEN alert = "MARKET REACTION: SUPPLY CHAIN"
+```
+
+**Movement Thresholds:**
+| Threshold | Daily Move | Interpretation |
+|-----------|------------|----------------|
+| Minor | >1% | Monitor, no alert |
+| Significant | >2% | Correlation check triggered |
+| Major | >5% | High-confidence correlation |
+
+**Celery Task Schedule:**
+- `fetch-market-data-15m`: Fetches Texas watchlist quotes every 15 minutes
+- `evaluate-market-correlation-5m`: Runs correlation analysis every 5 minutes
+
 ### 6.4 Correlation Engine
 
 **Hypothesis Testing:**
@@ -574,6 +622,7 @@ Texas is the ideal "Ground Zero" for the MVP:
 | `GRID` | P0 | EIA API (ERCOT) | Fast-moving (5-min intervals), high dynamism |
 | `WATR` | P0 | USGS NWIS | Slow-moving, high-impact spatial data |
 | `FLOW` | P0 | Simulated AIS / Port Stats | Logistics chokepoint monitoring |
+| `FIN` | P1 | yfinance (Phase 3) | Market correlation with physical events |
 
 ### 9.2.1 FLOW Function Code (Phase 2)
 
@@ -596,6 +645,35 @@ Texas is the ideal "Ground Zero" for the MVP:
 **Future Migration:** When budget allows, replace simulation with:
 1. Spire AIS (via Snowflake Marketplace) — $15/mo academic tier
 2. MarineTraffic API — If free tier (100/day) proves sufficient for spot checks
+
+### 9.2.2 FIN Function Code (Phase 3)
+
+**Command:** `FIN US-TX <GO>` — Texas Financial Correlation View
+
+**Data Strategy:** Uses `yfinance` library for free, unlimited stock data. No API key required.
+
+**Texas Proxy Watchlist:**
+| Symbol | Company | Physical Exposure | Sensitivity |
+|--------|---------|-------------------|-------------|
+| `VST` | Vistra Corp | ERCOT power generation | High |
+| `NRG` | NRG Energy | Integrated power, retail | High |
+| `TXN` | Texas Instruments | Semiconductor fabs | Medium |
+
+**UI Layout:** Split-screen view
+- **Left Panel:** Physical Status (Grid/Water/Port severity levels)
+- **Right Panel:** Watchlist stocks with sparkline charts (5-day history)
+
+**Correlation Detection:**
+- Runs every 5 minutes via Celery task
+- Checks if physical alert (WARNING/CRITICAL) coincides with >2% stock movement
+- Generates `MARKET_REACTION` alerts visible in ticker tray
+
+**API Endpoints:**
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/finance/quotes` | GET | Current watchlist quotes |
+| `/finance/history/{symbol}` | GET | Historical price data for sparklines |
+| `/finance/summary` | GET | Full summary with physical correlation |
 
 ### 9.3 Architecture Decisions
 

@@ -1,8 +1,8 @@
 # PWST Technical Architecture Specification
 ## Physical World Scarcity Terminal — Source of Truth Document
-**Version:** 0.5.0-alpha  
-**Last Updated:** 2026-02-27  
-**Status:** Phase 5 — The Predictive Layer
+**Version:** 1.0.0-RC  
+**Last Updated:** 2026-02-28  
+**Status:** Release Candidate — All Phases Complete
 
 ---
 
@@ -223,7 +223,7 @@ When migrating to Snowflake, leverage:
 | P0 | USGS NWIS | Streamflow, groundwater | Unlimited | `dataretrieval` | ✅ Verified |
 | P0 | NOAA NCEI | Climate, temperature | Unlimited | `requests` | ✅ Verified |
 | P0 | EIA API | Energy, petroleum | 1000/hr | `requests` | ✅ Verified |
-| P0 | FRED | Economic indicators | 120/min | `fredapi` | ✅ Verified |
+| P0 | FRED | Commodity prices, macro data | 120/min | `requests` | ✅ Phase 6 |
 | P1 | NASA Earthdata | GRACE, MODIS | Requires free account | `earthaccess` | ✅ Verified |
 | P1 | Copernicus/Sentinel | Satellite imagery | Free for research | `sentinelsat` | ✅ Verified |
 | P1 | OpenStreetMap | Infrastructure geometry | Unlimited | `osmnx` | ✅ Verified |
@@ -336,6 +336,7 @@ RISK US-CA <GO>              # Full risk dashboard for region
 FIN US-TX <GO>               # Financial correlation view (Phase 3)
 NEWS US-TX <GO>              # News sentiment analysis (Phase 4)
 WX US-TX <GO>                # Weather forecasts & predictive alerts (Phase 5)
+MACRO US-TX <GO>             # Commodity baseline - Henry Hub gas (Phase 6)
 ```
 
 **Modifiers:**
@@ -627,7 +628,62 @@ WX US-TX -predictive <GO>    # Predictive correlation alerts
 **Ticker Tray Integration:**
 Predictive alerts appear in ticker tray with `[PREDICTIVE]` prefix and severity color coding based on confidence level.
 
-### 6.7 Correlation Engine
+### 6.7 Linked Fate v5: Commodity Correlation (Phase 6)
+
+**The Macro-Commodity Layer — The Capstone:**
+
+Phase 6 introduces macro-economic baseline data to complete the correlation picture. The Texas grid depends heavily on natural gas (~50% of ERCOT generation). By correlating commodity prices with grid strain, we can assess the true economic impact of physical scarcity.
+
+**Data Source:**
+- **FRED API** (St. Louis Federal Reserve) — Free, requires API key
+- Series ID: DHHNGSP (Henry Hub Natural Gas Spot Price, $/MMBtu)
+- Get free key at: https://fred.stlouisfed.org/docs/api/api_key.html
+
+**Henry Hub Price Thresholds:**
+| Level | Price | Interpretation |
+|-------|-------|----------------|
+| NORMAL | <$4.00 | Typical trading range |
+| ELEVATED | >30d MA | Above average, watch closely |
+| PREMIUM | >$4.00 | Above normal, elevated generation costs |
+| SPIKE | >$6.00 | Major price spike, severe cost impact |
+
+**Correlation Rules (v5 - Commodity Capstone):**
+```
+RULE: STRAIN_WITH_COMMODITY_PREMIUM
+  IF (GRID STRAIN Alert Active)
+  AND (Henry Hub > 30-day Moving Average)
+  THEN alert = "CRITICAL: STRAIN MET WITH COMMODITY PREMIUM"
+  impact = "Expensive generation day"
+  confidence = STRONG
+
+RULE: EXTREME_COST_EVENT
+  IF (GRID EMERGENCY Alert Active)
+  AND (Henry Hub > $6.00/MMBtu - SPIKE)
+  THEN alert = "CRITICAL: EXTREME COST EVENT"
+  impact = "Power generation costs severely elevated"
+  confidence = STRONG
+
+RULE: PREDICTIVE_EXPENSIVE_GENERATION
+  IF (PREDICTIVE GRID STRAIN Active from v4)
+  AND (Henry Hub > 30-day Moving Average)
+  THEN alert = "WARNING: EXPENSIVE GENERATION FORECAST"
+  confidence = MODERATE
+```
+
+**MACRO Command Usage:**
+```
+MACRO US-TX <GO>             # Full commodity view with price chart
+MACRO US-TX -chart <GO>      # Price history chart only
+```
+
+**Celery Task Schedule:**
+- `fetch-macro-daily`: Fetches FRED commodity data daily at 6:30 AM UTC
+- `evaluate-commodity-15m`: Runs Linked Fate v5 commodity correlation every 15 minutes
+
+**Mock Data Fallback:**
+If `FRED_API_KEY` is not configured, the system generates realistic mock data based on historical Henry Hub trading patterns.
+
+### 6.8 Correlation Engine
 
 **Hypothesis Testing:**
 - Null: Physical indicator X has no predictive relationship with economic indicator Y
@@ -699,11 +755,12 @@ Physical-World-Scarcity-Terminal/
 │   │   ├── noaa.py
 │   │   ├── eia.py
 │   │   ├── weather.py          # NWS API forecasts (Phase 5)
+│   │   ├── macro_data.py       # FRED commodity data (Phase 6)
 │   │   └── scheduler.py        # Celery tasks
 │   ├── analysis/
 │   │   ├── anomaly.py
 │   │   ├── correlation.py
-│   │   ├── market_correlation.py  # Linked Fate engine (v4)
+│   │   ├── market_correlation.py  # Linked Fate engine (v5)
 │   │   └── spatial.py
 │   ├── api/                    # Optional FastAPI backend
 │   │   └── routes.py

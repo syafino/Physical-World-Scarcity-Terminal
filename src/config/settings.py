@@ -68,6 +68,10 @@ class Settings(BaseSettings):
         default=None,
         description="EIA API key (optional, increases rate limits)",
     )
+    fred_api_key: Optional[str] = Field(
+        default=None,
+        description="FRED API key for commodity data (get free key at fred.stlouisfed.org)",
+    )
     mapbox_access_token: Optional[str] = Field(
         default=None,
         description="Mapbox access token for map tiles",

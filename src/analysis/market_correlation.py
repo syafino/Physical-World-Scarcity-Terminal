@@ -1,13 +1,14 @@
 """
-Market Correlation Engine (Linked Fate v4)
+Market Correlation Engine (Linked Fate v5 - The Capstone)
 
 Cross-references physical scarcity alerts with financial market movements,
-news sentiment, and weather forecasts to detect correlations in real-time
-and anticipate future scarcity events.
+news sentiment, weather forecasts, and commodity prices to detect correlations
+in real-time and anticipate future scarcity events.
 
 Phase 3: The Financial Intersection
 Phase 4: The Unstructured Data Layer (Sentiment)
 Phase 5: The Predictive Layer (Weather)
+Phase 6: The Macro-Commodity Layer (Commodity Prices)
 
 Correlation Rules (v2 - Market):
 - IF (GRID STRAIN/EMERGENCY) AND (VST/NRG moving >2%) -> MARKET_REACTION: ENERGY_STRAIN
@@ -24,6 +25,11 @@ Correlation Rules (v4 - Predictive):
 - IF (Forecast Temp < 25°F in 48h) -> PREDICTIVE: FREEZE EMERGENCY
 - IF (Hurricane/Storm Warning for Houston) -> PREDICTIVE: PORT CHOKEPOINT
 - IF (Weather Alert Active) AND (Physical Alert Active) AND (Market Move) -> QUADRUPLE CORRELATION
+
+Correlation Rules (v5 - Commodity Capstone):
+- IF (GRID STRAIN Alert Active) AND (Henry Hub > 30-day MA) -> CRITICAL: STRAIN MET WITH COMMODITY PREMIUM
+- IF (PREDICTIVE GRID STRAIN) AND (Henry Hub > 30-day MA) -> WARNING: EXPENSIVE GENERATION FORECAST
+- IF (GAS SPIKE) AND (GRID STRAIN/EMERGENCY) -> CRITICAL: EXTREME COST EVENT
 """
 
 from dataclasses import dataclass, field
@@ -1111,6 +1117,354 @@ def evaluate_predictive_correlations() -> dict[str, Any]:
         
     except Exception as e:
         logger.error("predictive_correlation_evaluation_error", error=str(e))
+        return {
+            "status": "error",
+            "error": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+# ─────────────────────────────────────────────────────────────
+# Linked Fate v5: Commodity Correlation (Phase 6)
+# ─────────────────────────────────────────────────────────────
+
+@dataclass
+class CommodityCorrelation:
+    """Represents a detected commodity-physical correlation."""
+    correlation_type: str
+    commodity: str
+    commodity_price: float
+    commodity_premium_pct: float
+    physical_alert_code: str
+    physical_alert_level: str
+    confidence: CorrelationLevel
+    message: str
+    grid_cost_impact: str  # NORMAL, ELEVATED, HIGH, CRITICAL
+    detected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    metadata: dict = field(default_factory=dict)
+    
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "correlation_type": self.correlation_type,
+            "commodity": self.commodity,
+            "commodity_price": self.commodity_price,
+            "commodity_premium_pct": self.commodity_premium_pct,
+            "physical_alert_code": self.physical_alert_code,
+            "physical_alert_level": self.physical_alert_level,
+            "confidence": self.confidence.name,
+            "message": self.message,
+            "grid_cost_impact": self.grid_cost_impact,
+            "detected_at": self.detected_at.isoformat(),
+            "metadata": self.metadata,
+        }
+
+
+def get_commodity_status() -> dict[str, Any]:
+    """
+    Get current commodity (natural gas) status for correlation checks.
+    
+    Returns:
+        Dict with gas price, premium status, and alert level
+    """
+    try:
+        from src.ingestion.macro_data import get_gas_premium_status
+        return get_gas_premium_status()
+    except Exception as e:
+        logger.error("get_commodity_status_error", error=str(e))
+        return {
+            "is_premium": False,
+            "premium_percent": 0.0,
+            "alert_level": "UNKNOWN",
+            "current_price": None,
+            "moving_average": None,
+        }
+
+
+def check_commodity_grid_correlations(
+    physical_alerts: dict[str, list[dict]],
+    commodity_status: dict[str, Any],
+) -> list[CommodityCorrelation]:
+    """
+    Check for commodity-grid correlations (Linked Fate v5 Capstone).
+    
+    The key insight: When grid is strained AND gas prices are elevated,
+    power generation costs will be significantly higher than normal.
+    This compounds the economic impact of physical scarcity.
+    
+    Rules:
+    - GRID STRAIN + GAS PREMIUM = "STRAIN MET WITH COMMODITY PREMIUM"
+    - GRID EMERGENCY + GAS SPIKE = "EXTREME COST EVENT"
+    
+    Args:
+        physical_alerts: Current physical alerts by category
+        commodity_status: Current gas price status
+        
+    Returns:
+        List of detected commodity correlations
+    """
+    correlations = []
+    
+    gas_price = commodity_status.get("current_price")
+    gas_premium = commodity_status.get("premium_percent", 0)
+    gas_alert = commodity_status.get("alert_level", "NORMAL")
+    is_premium = commodity_status.get("is_premium", False)
+    
+    if gas_price is None:
+        return correlations
+    
+    grid_alerts = physical_alerts.get("GRID", [])
+    
+    for alert in grid_alerts:
+        alert_code = alert.get("title", "").replace(" ", "_").upper()
+        alert_level = alert.get("level", "")
+        
+        # Check for grid strain + commodity premium
+        if "STRAIN" in alert_code or "EMERGENCY" in alert_code:
+            
+            # CRITICAL: Grid emergency + Gas spike
+            if alert_level == "CRITICAL" and gas_alert == "SPIKE":
+                correlations.append(CommodityCorrelation(
+                    correlation_type="EXTREME_COST_EVENT",
+                    commodity="HENRY_HUB_GAS",
+                    commodity_price=gas_price,
+                    commodity_premium_pct=gas_premium,
+                    physical_alert_code=alert_code,
+                    physical_alert_level=alert_level,
+                    confidence=CorrelationLevel.STRONG,
+                    message=f"EXTREME COST EVENT: Grid emergency with gas at ${gas_price:.2f}/MMBtu ({gas_premium:+.1f}% premium). Power generation costs severely elevated.",
+                    grid_cost_impact="CRITICAL",
+                    metadata={
+                        "gas_ma_30d": commodity_status.get("moving_average"),
+                        "trigger": "grid_emergency_gas_spike",
+                    }
+                ))
+            
+            # CRITICAL: Grid strain + Gas premium
+            elif is_premium and gas_alert in ["PREMIUM", "SPIKE"]:
+                correlations.append(CommodityCorrelation(
+                    correlation_type="STRAIN_WITH_COMMODITY_PREMIUM",
+                    commodity="HENRY_HUB_GAS",
+                    commodity_price=gas_price,
+                    commodity_premium_pct=gas_premium,
+                    physical_alert_code=alert_code,
+                    physical_alert_level=alert_level,
+                    confidence=CorrelationLevel.STRONG,
+                    message=f"STRAIN MET WITH COMMODITY PREMIUM: Grid under strain while gas trades at ${gas_price:.2f}/MMBtu ({gas_premium:+.1f}% above 30d avg). Expensive generation day.",
+                    grid_cost_impact="HIGH",
+                    metadata={
+                        "gas_ma_30d": commodity_status.get("moving_average"),
+                        "trigger": "grid_strain_gas_premium",
+                    }
+                ))
+            
+            # WARNING: Grid strain + Gas elevated
+            elif is_premium and gas_alert == "ELEVATED":
+                correlations.append(CommodityCorrelation(
+                    correlation_type="ELEVATED_GENERATION_COST",
+                    commodity="HENRY_HUB_GAS",
+                    commodity_price=gas_price,
+                    commodity_premium_pct=gas_premium,
+                    physical_alert_code=alert_code,
+                    physical_alert_level=alert_level,
+                    confidence=CorrelationLevel.MODERATE,
+                    message=f"ELEVATED GENERATION COST: Grid strain with gas {gas_premium:+.1f}% above average at ${gas_price:.2f}/MMBtu.",
+                    grid_cost_impact="ELEVATED",
+                    metadata={
+                        "gas_ma_30d": commodity_status.get("moving_average"),
+                        "trigger": "grid_strain_gas_elevated",
+                    }
+                ))
+    
+    return correlations
+
+
+def check_predictive_commodity_correlations(
+    commodity_status: dict[str, Any],
+) -> list[CommodityCorrelation]:
+    """
+    Check for predictive commodity correlations.
+    
+    Correlates weather-based grid strain predictions with commodity prices.
+    If we predict grid strain AND gas is already premium, expect high costs.
+    
+    Args:
+        commodity_status: Current gas price status
+        
+    Returns:
+        List of predictive commodity correlations
+    """
+    correlations = []
+    
+    gas_price = commodity_status.get("current_price")
+    gas_premium = commodity_status.get("premium_percent", 0)
+    is_premium = commodity_status.get("is_premium", False)
+    
+    if gas_price is None or not is_premium:
+        return correlations
+    
+    # Check weather-based grid predictions
+    try:
+        from src.ingestion.weather import get_weather_summary
+        weather = get_weather_summary()
+        danger = weather.get("danger_assessment", {}).get("overall", {})
+        
+        grid_prediction = danger.get("grid_strain_prediction", "NORMAL")
+        heat_risk = danger.get("heat_risk", "NONE")
+        
+        # If predicting grid strain and gas is premium
+        if grid_prediction in ["HIGH", "SEVERE", "EXTREME"] and is_premium:
+            correlations.append(CommodityCorrelation(
+                correlation_type="PREDICTIVE_EXPENSIVE_GENERATION",
+                commodity="HENRY_HUB_GAS",
+                commodity_price=gas_price,
+                commodity_premium_pct=gas_premium,
+                physical_alert_code="PREDICTIVE_GRID_STRAIN",
+                physical_alert_level="WARNING",
+                confidence=CorrelationLevel.MODERATE,
+                message=f"[PREDICTIVE] EXPENSIVE GENERATION FORECAST: Grid strain predicted ({grid_prediction}) while gas at ${gas_price:.2f}/MMBtu premium. Expect elevated power costs.",
+                grid_cost_impact="ELEVATED",
+                metadata={
+                    "grid_prediction": grid_prediction,
+                    "heat_risk": heat_risk,
+                    "trigger": "predictive_strain_gas_premium",
+                }
+            ))
+            
+    except Exception as e:
+        logger.debug("predictive_commodity_check_skipped", error=str(e))
+    
+    return correlations
+
+
+def store_commodity_alerts(correlations: list[CommodityCorrelation]) -> int:
+    """
+    Store commodity correlation alerts in database.
+    
+    Args:
+        correlations: List of detected correlations
+        
+    Returns:
+        Number of alerts stored
+    """
+    if not correlations:
+        return 0
+    
+    stored = 0
+    
+    with get_db_session() as db:
+        for corr in correlations:
+            # Determine alert level
+            if corr.grid_cost_impact == "CRITICAL":
+                level = "CRITICAL"
+            elif corr.grid_cost_impact == "HIGH":
+                level = "WARNING"
+            else:
+                level = "WATCH"
+            
+            alert = Alert(
+                alert_type="LINKED",
+                alert_level=level,
+                title=corr.correlation_type.replace("_", " "),
+                message=corr.message,
+                source="linked_fate_v5_commodity",
+                triggered_at=corr.detected_at,
+                is_active=True,
+                metadata={
+                    "correlation_type": corr.correlation_type,
+                    "commodity": corr.commodity,
+                    "commodity_price": corr.commodity_price,
+                    "commodity_premium_pct": corr.commodity_premium_pct,
+                    "grid_cost_impact": corr.grid_cost_impact,
+                    "physical_alert": corr.physical_alert_code,
+                    "confidence": corr.confidence.name,
+                    **corr.metadata,
+                },
+            )
+            db.add(alert)
+            stored += 1
+        
+        db.commit()
+    
+    return stored
+
+
+def evaluate_commodity_correlations() -> dict[str, Any]:
+    """
+    Main entry point for commodity correlation evaluation (Linked Fate v5).
+    Called by the scheduler every 15 minutes.
+    
+    Implements Linked Fate v5 - The Capstone:
+    1. Fetch current commodity (gas) status
+    2. Fetch current physical alerts
+    3. Check for grid+commodity correlations
+    4. Check for predictive+commodity correlations
+    5. Store alerts
+    
+    Returns:
+        Dict with evaluation summary
+    """
+    logger.info("commodity_correlation_evaluation_started")
+    
+    try:
+        # Get commodity status
+        commodity_status = get_commodity_status()
+        
+        if commodity_status.get("current_price") is None:
+            return {
+                "status": "no_commodity_data",
+                "message": "Unable to fetch commodity data",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        
+        # Get physical alerts
+        physical_alerts = get_active_physical_alerts()
+        
+        # Check all correlation types
+        all_correlations = []
+        
+        # Grid + Commodity correlations
+        grid_commodity = check_commodity_grid_correlations(
+            physical_alerts, commodity_status
+        )
+        all_correlations.extend(grid_commodity)
+        
+        # Predictive + Commodity correlations
+        predictive_commodity = check_predictive_commodity_correlations(
+            commodity_status
+        )
+        all_correlations.extend(predictive_commodity)
+        
+        # Store alerts
+        stored_count = store_commodity_alerts(all_correlations)
+        
+        # Build summary
+        summary = {
+            "status": "completed",
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "commodity_status": {
+                "price": commodity_status.get("current_price"),
+                "premium_percent": commodity_status.get("premium_percent"),
+                "alert_level": commodity_status.get("alert_level"),
+                "is_premium": commodity_status.get("is_premium"),
+            },
+            "grid_alerts_checked": len(physical_alerts.get("GRID", [])),
+            "commodity_correlations_detected": len(all_correlations),
+            "alerts_stored": stored_count,
+            "correlations": [c.to_dict() for c in all_correlations],
+        }
+        
+        logger.info(
+            "commodity_correlation_evaluation_completed",
+            correlations=len(all_correlations),
+            stored=stored_count,
+            gas_price=commodity_status.get("current_price"),
+            is_premium=commodity_status.get("is_premium"),
+        )
+        
+        return summary
+        
+    except Exception as e:
+        logger.error("commodity_correlation_evaluation_error", error=str(e))
         return {
             "status": "error",
             "error": str(e),

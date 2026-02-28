@@ -421,6 +421,8 @@ def render_data_panel(data: Optional[list[dict]], function_code: Optional[str]):
                 <p style="color: #00FF00;">GRID ERCOT &lt;GO&gt;</p>
                 <p style="color: #00FF00;">FIN US-TX &lt;GO&gt;</p>
                 <p style="color: #00FF00;">NEWS US-TX &lt;GO&gt;</p>
+                <p style="color: #00FF00;">WX US-TX &lt;GO&gt;</p>
+                <p style="color: #00FF00;">MACRO US-TX &lt;GO&gt;</p>
                 <p style="color: #00FF00;">RISK US-TX &lt;GO&gt;</p>
             </div>
             """,
@@ -443,6 +445,8 @@ def render_data_panel(data: Optional[list[dict]], function_code: Optional[str]):
         render_news_data(data)
     elif function_code == "WX":
         render_wx_data(data)
+    elif function_code == "MACRO":
+        render_macro_data(data)
     else:
         # Generic table view
         df = pd.DataFrame(data)
@@ -1202,6 +1206,221 @@ def render_wx_data(data: list[dict]):
         )
 
 
+def render_macro_data(data: list[dict]):
+    """
+    Render MACRO command - commodity baseline data.
+    
+    Shows Henry Hub Natural Gas spot prices with:
+    - Current price and 30-day moving average
+    - Premium/discount status
+    - Price chart over 30 days
+    - Grid cost impact assessment
+    
+    Phase 6: The Macro-Commodity Layer
+    """
+    st.markdown("### ▓ COMMODITY BASELINE: HENRY HUB NATURAL GAS")
+    st.markdown("*Texas Grid Power Generation Cost Indicator*")
+    
+    if not data:
+        st.markdown("*No commodity data available. Check FRED API key in .env*")
+        return
+    
+    record = data[0] if data else {}
+    summary = record.get("_summary", {})
+    series_info = record.get("_series_info", {})
+    chart_data = record.get("chart_data", [])
+    
+    # ─────────────────────────────────────────────────────────────
+    # Summary Header - Price and Status
+    # ─────────────────────────────────────────────────────────────
+    latest_price = record.get("latest_price")
+    ma_30d = record.get("moving_average_30d")
+    premium_pct = record.get("premium_percent", 0)
+    is_above_ma = record.get("is_above_ma", False)
+    alert_level = summary.get("commodity_alert_level", "NORMAL")
+    grid_impact = summary.get("grid_cost_impact", "NORMAL")
+    is_mock = record.get("is_mock", True)
+    
+    # Determine colors
+    alert_colors = {
+        "NORMAL": "#00FF00",
+        "ELEVATED": "#FFFF00",
+        "PREMIUM": "#FFA500",
+        "SPIKE": "#FF0000",
+    }
+    alert_color = alert_colors.get(alert_level, "#6E7681")
+    
+    impact_colors = {
+        "NORMAL": "#00FF00",
+        "ELEVATED": "#FFFF00",
+        "HIGH": "#FFA500",
+        "CRITICAL": "#FF0000",
+    }
+    impact_color = impact_colors.get(grid_impact, "#6E7681")
+    
+    # Price direction
+    direction_icon = "▲" if is_above_ma else "▼" if not is_above_ma and ma_30d else "─"
+    direction_color = "#FF4500" if is_above_ma else "#00FF00" if ma_30d else "#6E7681"
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #161B22;
+                border-left: 4px solid {alert_color};
+                padding: 12px;
+            ">
+                <div style="color: #6E7681; font-size: 11px;">SPOT PRICE</div>
+                <div style="color: {alert_color}; font-size: 28px; font-weight: bold;">
+                    ${latest_price:.2f if latest_price else 'N/A'}
+                </div>
+                <div style="color: #6E7681; font-size: 10px;">$/MMBtu</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    
+    with col2:
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #161B22;
+                border-left: 4px solid {direction_color};
+                padding: 12px;
+            ">
+                <div style="color: #6E7681; font-size: 11px;">VS 30-DAY AVG</div>
+                <div style="color: {direction_color}; font-size: 24px; font-weight: bold;">
+                    {direction_icon} {premium_pct:+.1f}%
+                </div>
+                <div style="color: #6E7681; font-size: 10px;">MA: ${ma_30d:.2f if ma_30d else 'N/A'}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    
+    with col3:
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #161B22;
+                border-left: 4px solid {impact_color};
+                padding: 12px;
+            ">
+                <div style="color: #6E7681; font-size: 11px;">GRID COST IMPACT</div>
+                <div style="color: {impact_color}; font-size: 24px; font-weight: bold;">
+                    {grid_impact}
+                </div>
+                <div style="color: #6E7681; font-size: 10px;">Generation Cost Level</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    
+    # Alert message if present
+    alert_msg = summary.get("alert_message")
+    if alert_msg:
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #161B22;
+                border-left: 4px solid {alert_color};
+                padding: 8px 12px;
+                margin-top: 8px;
+                font-size: 12px;
+                color: {alert_color};
+            ">
+                ⚠ {alert_msg}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    
+    # Mock data warning
+    if is_mock:
+        st.markdown(
+            """
+            <div style="
+                background-color: #2D1F00;
+                border-left: 4px solid #FFA500;
+                padding: 8px 12px;
+                margin-top: 8px;
+                font-size: 11px;
+                color: #FFA500;
+            ">
+                ⚠ USING MOCK DATA - Add FRED_API_KEY to .env for live prices
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    
+    # ─────────────────────────────────────────────────────────────
+    # Price Chart
+    # ─────────────────────────────────────────────────────────────
+    st.markdown("#### 30-Day Price History")
+    
+    if chart_data:
+        df = pd.DataFrame(chart_data)
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
+        
+        # Add threshold lines as separate columns
+        premium_threshold = record.get("premium_threshold", 4.00)
+        spike_threshold = record.get("spike_threshold", 6.00)
+        historical_avg = record.get("historical_avg", 2.50)
+        
+        df["Premium Threshold"] = premium_threshold
+        df["Historical Avg"] = historical_avg
+        
+        # Create chart
+        st.line_chart(
+            df.set_index("date")[["price", "Premium Threshold", "Historical Avg"]],
+            use_container_width=True,
+            height=250,
+        )
+        
+        # Legend
+        st.markdown(
+            f"""
+            <div style="font-size: 10px; color: #6E7681; display: flex; gap: 20px;">
+                <span>● Price</span>
+                <span style="color: #FFA500;">── Premium Threshold (${premium_threshold})</span>
+                <span style="color: #58A6FF;">── Historical Avg (${historical_avg})</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown("*No chart data available*")
+    
+    # ─────────────────────────────────────────────────────────────
+    # Context Information
+    # ─────────────────────────────────────────────────────────────
+    with st.expander("Henry Hub & Texas Grid Context", expanded=False):
+        texas_relevance = series_info.get("texas_relevance", "N/A")
+        st.markdown(
+            f"""
+            **Why Henry Hub Matters for Texas:**
+            
+            {texas_relevance}
+            
+            **Price Thresholds:**
+            | Level | Price | Interpretation |
+            |-------|-------|----------------|
+            | NORMAL | <${record.get('premium_threshold', 4.00):.2f} | Typical trading range |
+            | PREMIUM | >${record.get('premium_threshold', 4.00):.2f} | Above normal, elevated generation costs |
+            | SPIKE | >${record.get('spike_threshold', 6.00):.2f} | Major price spike, severe cost impact |
+            
+            **Linked Fate v5 Correlation:**
+            - If GRID STRAIN + GAS PREMIUM → "STRAIN MET WITH COMMODITY PREMIUM"
+            - If GRID EMERGENCY + GAS SPIKE → "EXTREME COST EVENT"
+            
+            **Data Source:** FRED API (St. Louis Fed) - Series: DHHNGSP
+            """
+        )
+
+
 def _get_sentiment_color(sentiment: float) -> str:
     """Get color for sentiment score."""
     if sentiment <= -0.5:
@@ -1540,6 +1759,7 @@ def main():
             | `FIN [region] <GO>` | Financial correlation view (Phase 3) |
             | `NEWS [region] <GO>` | News sentiment analysis (Phase 4) |
             | `WX [region] <GO>` | Weather forecasts & predictive analysis (Phase 5) |
+            | `MACRO [region] <GO>` | Commodity baseline - Henry Hub gas prices (Phase 6) |
             | `RISK [region] <GO>` | Risk dashboard |
             
             **Regions:** `US-TX` (Texas), `ERCOT` (Texas Grid), `HOU` (Port of Houston)
@@ -1551,6 +1771,8 @@ def main():
             **Weather Locations:** DALLAS, HOUSTON (ERCOT load center, Port/Logistics)
             
             **Danger Zones:** >98°F (heat risk), <25°F (freeze risk)
+            
+            **Commodity:** Henry Hub Natural Gas (DHHNGSP) - ERCOT generation cost indicator
             
             **Keyboard:** Press `Enter` to execute command
             """

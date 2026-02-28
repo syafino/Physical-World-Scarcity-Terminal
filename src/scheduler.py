@@ -92,6 +92,18 @@ app.conf.beat_schedule = {
         "schedule": crontab(minute="*/15"),  # Every 15 minutes
         "options": {"queue": "analysis"},
     },
+    # Fetch commodity data daily (Phase 6 - Macro Layer)
+    "fetch-macro-daily": {
+        "task": "src.ingestion.scheduler.fetch_macro_data",
+        "schedule": crontab(minute=30, hour=6),  # Daily at 6:30 AM UTC (after FRED updates)
+        "options": {"queue": "ingestion"},
+    },
+    # Evaluate commodity-grid correlations every 15 minutes (Phase 6 - Linked Fate v5)
+    "evaluate-commodity-15m": {
+        "task": "src.ingestion.scheduler.evaluate_commodity_correlation",
+        "schedule": crontab(minute="*/15"),  # Every 15 minutes
+        "options": {"queue": "analysis"},
+    },
 }
 
 
@@ -310,6 +322,50 @@ def evaluate_predictive_correlation(self):
 
     try:
         result = evaluate_predictive_correlations()
+        return result
+    except Exception as e:
+        self.retry(exc=e, countdown=60, max_retries=2)
+
+
+@app.task(bind=True, name="src.ingestion.scheduler.fetch_macro_data")
+def fetch_macro_data(self):
+    """
+    Celery task to fetch commodity macro data from FRED API (Linked Fate v5).
+    
+    Phase 6: Macro-Commodity Layer.
+    Fetches Henry Hub Natural Gas spot prices daily to provide
+    macro-economic context for grid strain analysis.
+    
+    Returns:
+        Dict with fetch summary
+    """
+    from src.ingestion.macro_data import fetch_and_cache_macro_data
+
+    try:
+        result = fetch_and_cache_macro_data()
+        return result
+    except Exception as e:
+        self.retry(exc=e, countdown=300, max_retries=2)
+
+
+@app.task(bind=True, name="src.ingestion.scheduler.evaluate_commodity_correlation")
+def evaluate_commodity_correlation(self):
+    """
+    Celery task to evaluate commodity-grid correlations (Linked Fate v5).
+    
+    The Capstone correlation rule:
+    IF (ERCOT Grid Strain Alert Active) AND (Henry Hub Gas Price > 30-day MA)
+    THEN -> "CRITICAL EVENT: STRAIN MET WITH COMMODITY PREMIUM"
+    
+    This indicates that power generation will be exceptionally expensive today.
+    
+    Returns:
+        Dict with correlation analysis results
+    """
+    from src.analysis.market_correlation import evaluate_commodity_correlations
+
+    try:
+        result = evaluate_commodity_correlations()
         return result
     except Exception as e:
         self.retry(exc=e, countdown=60, max_retries=2)

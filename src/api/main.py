@@ -229,6 +229,8 @@ def execute_command(request: CommandRequest, db: Session = Depends(get_db)):
             data, anomalies = execute_news(db, region_code)
         elif function_code == "WX":
             data, anomalies = execute_wx(db, region_code)
+        elif function_code == "MACRO":
+            data, anomalies = execute_macro(db, region_code)
         else:
             return CommandResponse(
                 success=False,
@@ -944,6 +946,102 @@ def execute_wx(db: Session, region_code: str) -> tuple[list, list]:
         })
     
     return data, formatted_alerts
+
+
+def execute_macro(db: Session, region_code: str) -> tuple[list, list]:
+    """
+    Execute MACRO command - commodity baseline data.
+    
+    Fetches Henry Hub Natural Gas spot prices from FRED API
+    to provide macro-economic context for grid cost analysis.
+    
+    Part of Phase 6: The Macro-Commodity Layer.
+    
+    Args:
+        db: Database session
+        region_code: Region code (Texas focus)
+        
+    Returns:
+        Tuple of (commodity_data, commodity_alerts)
+    """
+    from src.ingestion.macro_data import (
+        get_macro_summary,
+        get_gas_premium_status,
+        COMMODITY_SERIES,
+        HISTORICAL_BASELINE,
+    )
+    
+    # Fetch macro summary (30 days of data)
+    summary = get_macro_summary(days_back=30)
+    
+    # Format data for UI
+    data = []
+    
+    henry_hub = summary.henry_hub
+    if henry_hub:
+        # Build chart data
+        chart_data = []
+        for obs in henry_hub.observations:
+            chart_data.append({
+                "date": obs.date.isoformat(),
+                "price": obs.value,
+            })
+        
+        # Get baseline info
+        baseline = HISTORICAL_BASELINE.get("DHHNGSP", {})
+        
+        record = {
+            "series_id": henry_hub.series_id,
+            "name": henry_hub.name,
+            "unit": henry_hub.unit,
+            "latest_price": henry_hub.latest_value,
+            "latest_date": henry_hub.latest_date.isoformat() if henry_hub.latest_date else None,
+            "moving_average_30d": henry_hub.calculate_moving_average(30),
+            "std_dev_30d": henry_hub.calculate_std_dev(30),
+            "premium_percent": henry_hub.get_premium_percentage(),
+            "is_above_ma": henry_hub.is_above_moving_average(),
+            "is_mock": henry_hub.is_mock,
+            "observation_count": len(henry_hub.observations),
+            "chart_data": chart_data,
+            # Thresholds for UI
+            "premium_threshold": baseline.get("premium_threshold", 4.00),
+            "spike_threshold": baseline.get("spike_threshold", 6.00),
+            "historical_avg": baseline.get("30d_avg", 2.50),
+            # Summary
+            "_summary": {
+                "commodity_alert_level": summary.commodity_alert_level,
+                "grid_cost_impact": summary.grid_cost_impact,
+                "alert_message": summary.alert_message,
+                "fetched_at": summary.fetched_at.isoformat(),
+            },
+            # Series info
+            "_series_info": COMMODITY_SERIES.get("DHHNGSP", {}),
+        }
+        data.append(record)
+    
+    # Generate alerts based on commodity status
+    alerts = []
+    
+    if summary.commodity_alert_level in ["PREMIUM", "SPIKE"]:
+        alerts.append({
+            "type": "MACRO",
+            "category": "COMMODITY",
+            "level": "CRITICAL" if summary.commodity_alert_level == "SPIKE" else "WARNING",
+            "title": f"GAS {summary.commodity_alert_level}",
+            "message": summary.alert_message,
+            "severity": 1.0 if summary.commodity_alert_level == "SPIKE" else 0.8,
+        })
+    elif summary.commodity_alert_level == "ELEVATED":
+        alerts.append({
+            "type": "MACRO",
+            "category": "COMMODITY",
+            "level": "WATCH",
+            "title": "GAS ELEVATED",
+            "message": summary.alert_message,
+            "severity": 0.6,
+        })
+    
+    return data, alerts
 
 
 # ─────────────────────────────────────────────────────────────

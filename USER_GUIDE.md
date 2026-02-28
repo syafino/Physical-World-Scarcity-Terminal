@@ -1,7 +1,7 @@
 # PWST User Guide
 ## Physical World Scarcity Terminal — Operator Manual
-**Version:** 0.5.0-alpha  
-**Terminal Build:** Phase 5 — The Predictive Layer
+**Version:** 1.0.0-RC  
+**Terminal Build:** Phase 6 — Release Candidate (All Phases Complete)
 
 ---
 
@@ -162,6 +162,29 @@ CORR WATR:AGRI US-CA <GO>      # Water-to-agriculture correlation
 - `WX US-TX <GO>` — Texas weather forecasts and danger zones
 - `WX US-TX -danger <GO>` — Temperature danger thresholds only
 - `WX US-TX -predictive <GO>` — Predictive grid strain alerts
+
+### Macro & Commodities (Phase 6)
+
+| Code | Name | Description |
+|------|------|-------------|
+| `MACRO` | Commodities | Natural gas prices, commodity baselines, grid cost context |
+
+**Data Source:** Federal Reserve Economic Data (FRED) API  
+**Primary Series:** DHHNGSP — Henry Hub Natural Gas Spot Price ($/MMBtu)
+
+**Examples:**
+- `MACRO <GO>` — Current commodity summary with Henry Hub price
+- `MACRO US-TX <GO>` — Texas commodity context (gas-dependent grid)
+
+**Price Thresholds:**
+| Status | Price Range | Grid Impact |
+|--------|-------------|-------------|
+| `NORMAL` | <$4.00/MMBtu | Normal generation costs |
+| `PREMIUM` | $4.00-$6.00/MMBtu | Elevated grid operating costs |
+| `SPIKE` | >$6.00/MMBtu | High-cost generation conditions |
+
+**Linked Fate v5 Correlation:**  
+When ERCOT grid strain alerts are active AND Henry Hub price exceeds its 30-day moving average, the terminal triggers a `CRITICAL EVENT: STRAIN MET WITH COMMODITY PREMIUM` alert. This indicates the Texas grid is simultaneously strained AND facing elevated fuel costs—a compound risk scenario.
 
 ### Intelligence & Analysis
 
@@ -491,6 +514,72 @@ WX US-TX -summary <GO>     # 7-day forecast summary
 
 ---
 
+## 11.6 Macro-Commodity Layer (Phase 6)
+
+### Overview
+
+The Macro-Commodity Layer provides economic context for physical scarcity events. Texas relies heavily on natural gas for power generation—when gas prices spike AND the grid is strained, operators face compounding risk.
+
+> "Physical scarcity without economic context is half the picture."
+
+### Why Henry Hub Matters
+
+Henry Hub is the benchmark pricing point for U.S. natural gas futures. ERCOT's generation mix is ~40-50% natural gas. When spot prices exceed historical norms during grid strain events, generation becomes expensive AND potentially scarce.
+
+### Price Thresholds
+
+| Status | Price | Grid Cost Impact |
+|--------|-------|------------------|
+| `NORMAL` | <$4.00/MMBtu | Generation costs at baseline |
+| `ELEVATED` | $4.00-$5.00/MMBtu | Above-average generation costs |
+| `HIGH` | $5.00-$6.00/MMBtu | Significant cost premium |
+| `CRITICAL` | >$6.00/MMBtu | Extreme generation costs, margin compression |
+
+### Linked Fate v5 Correlation
+
+The Linked Fate engine monitors for compound risk scenarios:
+
+```
+IF (ERCOT Grid Strain Alert Active) 
+   AND (Henry Hub Price > 30-day Moving Average)
+   → CRITICAL EVENT: STRAIN MET WITH COMMODITY PREMIUM
+```
+
+This alert indicates the grid is both:
+1. **Physically constrained** — demand approaching or exceeding supply
+2. **Economically constrained** — fuel costs above normal
+
+When both conditions are true, grid operators face difficult choices: high-cost generation to meet demand, or risk shortfall.
+
+### MACRO Command Usage
+
+```
+MACRO <GO>                 # Full commodity summary
+MACRO US-TX <GO>           # Texas commodity context
+MACRO -30d <GO>            # 30-day price history
+```
+
+### Data Source & Setup
+
+**FRED API** (api.stlouisfed.org/fred)
+- Cost: Free
+- Coverage: Thousands of economic time series
+- Series: DHHNGSP (Henry Hub Natural Gas Spot Price)
+- Update frequency: Daily (fetched at 6:30 AM UTC)
+
+**API Key Setup:**
+
+1. Register at: https://fred.stlouisfed.org/docs/api/api_key.html
+2. Add to your `.env` file:
+   ```
+   FRED_API_KEY=your_api_key_here
+   ```
+3. Restart the terminal
+
+**Without API Key:** The terminal generates synthetic mock data based on historical Henry Hub patterns. This allows testing and development without FRED access, but production deployments should use the live API.
+
+---
+
 ## 12. Troubleshooting
 
 ### "No Data Available"
@@ -580,6 +669,7 @@ PWST aggregates publicly available data. All data remains property of its origin
 - **EIA** — Energy data (Public Domain)
 - **NASA** — Satellite data (Public Domain with attribution)
 - **Copernicus/ESA** — Sentinel imagery (Free for research with attribution)
+- **FRED** — Federal Reserve Economic Data, commodity prices (Public Domain)
 
 ### Disclaimer
 

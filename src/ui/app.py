@@ -1274,7 +1274,7 @@ def render_macro_data(data: list[dict]):
             ">
                 <div style="color: #6E7681; font-size: 11px;">SPOT PRICE</div>
                 <div style="color: {alert_color}; font-size: 28px; font-weight: bold;">
-                    ${latest_price:.2f if latest_price else 'N/A'}
+                    {f'${latest_price:.2f}' if latest_price else 'N/A'}
                 </div>
                 <div style="color: #6E7681; font-size: 10px;">$/MMBtu</div>
             </div>
@@ -1294,7 +1294,7 @@ def render_macro_data(data: list[dict]):
                 <div style="color: {direction_color}; font-size: 24px; font-weight: bold;">
                     {direction_icon} {premium_pct:+.1f}%
                 </div>
-                <div style="color: #6E7681; font-size: 10px;">MA: ${ma_30d:.2f if ma_30d else 'N/A'}</div>
+                <div style="color: #6E7681; font-size: 10px;">MA: {f'${ma_30d:.2f}' if ma_30d else 'N/A'}</div>
             </div>
             """,
             unsafe_allow_html=True,

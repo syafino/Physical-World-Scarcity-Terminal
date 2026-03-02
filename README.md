@@ -203,6 +203,12 @@ pytest tests/ -v
 pytest tests/ --cov=src --cov-report=html
 ```
 
+## Booting options
+
+./scripts/start.sh up      # Start all services
+./scripts/start.sh down    # Stop all services
+./scripts/start.sh logs    # View logs
+
 ## Configuration
 
 All configuration via environment variables (see `.env.example`):

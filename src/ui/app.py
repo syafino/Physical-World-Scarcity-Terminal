@@ -289,6 +289,47 @@ def check_api_health() -> bool:
 # ─────────────────────────────────────────────────────────────
 
 
+def get_depth_color(value: float, anomaly_ids: Optional[set] = None, station_id: Optional[str] = None) -> list[int]:
+    """Get color based on water depth value.
+    
+    Color gradient for water depth (typically negative values for depth below surface):
+    - Green: Nominal levels (0 to -50 ft)
+    - Yellow: Moderate depletion (-50 to -100 ft)  
+    - Orange: Concerning depletion (-100 to -150 ft)
+    - Red: Critical depletion (below -150 ft)
+    
+    Anomalies always show as bright red regardless of depth.
+    """
+    # Anomaly override
+    if anomaly_ids and station_id and station_id in anomaly_ids:
+        return [255, 0, 0, 220]  # Bright red for anomaly
+    
+    if value is None:
+        return [128, 128, 128, 150]  # Gray for missing data
+    
+    # Normalize depth (more negative = deeper = worse)
+    # Use absolute value since depths are typically negative
+    depth = abs(value)
+    
+    if depth <= 50:
+        # Green zone: nominal
+        return [0, 255, 100, 200]
+    elif depth <= 100:
+        # Yellow zone: moderate
+        t = (depth - 50) / 50  # 0 to 1
+        r = int(255 * t)
+        g = 255
+        return [r, g, 0, 200]
+    elif depth <= 150:
+        # Orange zone: concerning
+        t = (depth - 100) / 50  # 0 to 1
+        g = int(255 * (1 - t * 0.6))  # Fade from 255 to ~100
+        return [255, g, 0, 200]
+    else:
+        # Red zone: critical
+        return [255, 50, 50, 220]
+
+
 def create_map(data: Optional[list[dict]], anomaly_ids: Optional[set] = None) -> pdk.Deck:
     """Create PyDeck map with data points."""
     layers = []
@@ -300,12 +341,13 @@ def create_map(data: Optional[list[dict]], anomaly_ids: Optional[set] = None) ->
         if geo_data:
             df = pd.DataFrame(geo_data)
 
-            # Color based on anomaly status
+            # Color based on water depth value (gradient from green to red)
             def get_color(row):
-                # Check if this station has an anomaly
-                if anomaly_ids and row.get("station_id") in anomaly_ids:
-                    return [255, 0, 0, 200]  # Red for anomaly
-                return [0, 255, 0, 180]  # Green for normal
+                return get_depth_color(
+                    row.get("value"),
+                    anomaly_ids,
+                    row.get("station_id")
+                )
 
             df["color"] = df.apply(get_color, axis=1)
 
@@ -470,13 +512,26 @@ def render_water_data(data: list[dict]):
             with col3:
                 st.metric("STATIONS", len(data))
 
-    # Data table
+    # Data table - prioritize depth value visibility
     df = pd.DataFrame(data)
     if not df.empty:
-        display_cols = ["station_id", "station_name", "value", "aquifer", "observed_at"]
+        # Reorder columns: station name first, then depth value immediately visible
+        display_cols = ["station_name", "value", "aquifer", "station_id", "observed_at"]
         display_cols = [c for c in display_cols if c in df.columns]
+        
+        # Rename columns for clarity
+        display_df = df[display_cols].head(20).copy()
+        col_rename = {
+            "station_name": "STATION",
+            "value": "DEPTH (ft)",
+            "aquifer": "AQUIFER",
+            "station_id": "ID",
+            "observed_at": "OBSERVED",
+        }
+        display_df = display_df.rename(columns={k: v for k, v in col_rename.items() if k in display_df.columns})
+        
         st.dataframe(
-            df[display_cols].head(20),
+            display_df,
             use_container_width=True,
             height=300,
         )

@@ -23,6 +23,55 @@ from src.db.models import Alert, Anomaly, Indicator, Observation, Region, Statio
 
 logger = structlog.get_logger(__name__)
 
+# ─────────────────────────────────────────────────────────────
+# Multi-Region Configuration (Phase 7)
+# ─────────────────────────────────────────────────────────────
+
+SUPPORTED_REGIONS = {
+    "US-TX": {
+        "name": "Texas",
+        "grid_operator": "ERCOT",
+        "state_code": "TX",
+        "center": {"latitude": 31.0, "longitude": -100.0},
+        "usgs_state": "tx",
+    },
+    "US-CA": {
+        "name": "California",
+        "grid_operator": "CAISO",
+        "state_code": "CA",
+        "center": {"latitude": 36.7783, "longitude": -119.4179},
+        "usgs_state": "ca",
+    },
+    # Aliases
+    "ERCOT": {
+        "name": "Texas",
+        "grid_operator": "ERCOT",
+        "state_code": "TX",
+        "center": {"latitude": 31.0, "longitude": -100.0},
+        "usgs_state": "tx",
+        "canonical": "US-TX",
+    },
+    "CAISO": {
+        "name": "California",
+        "grid_operator": "CAISO",
+        "state_code": "CA",
+        "center": {"latitude": 36.7783, "longitude": -119.4179},
+        "usgs_state": "ca",
+        "canonical": "US-CA",
+    },
+}
+
+def get_canonical_region(region_code: str) -> str:
+    """Convert region alias to canonical form."""
+    region_info = SUPPORTED_REGIONS.get(region_code.upper())
+    if region_info:
+        return region_info.get("canonical", region_code.upper())
+    return region_code.upper()
+
+def get_region_info(region_code: str) -> dict:
+    """Get region configuration info."""
+    return SUPPORTED_REGIONS.get(region_code.upper(), SUPPORTED_REGIONS["US-TX"])
+
 # FastAPI app
 app = FastAPI(
     title="PWST API",
@@ -382,6 +431,16 @@ def execute_grid(db: Session, region_code: str) -> tuple[list, list]:
     """Execute GRID command - power grid data."""
     from sqlalchemy import func as sqlfunc
     
+    # Get region info to determine grid operator
+    region_info = get_region_info(region_code)
+    grid_operator = region_info.get("grid_operator", "ERCOT")
+    canonical_region = get_canonical_region(region_code)
+    
+    # Route to appropriate grid handler based on region
+    if grid_operator == "CAISO":
+        return execute_grid_caiso(db, canonical_region)
+    
+    # Default: ERCOT (Texas) - use existing EIA-based implementation
     # Get grid indicators
     indicator_codes = ["GRID_DEMAND", "GRID_GENERATION", "GRID_WIND", "GRID_SOLAR"]
     indicators = db.query(Indicator).filter(Indicator.code.in_(indicator_codes)).all()
@@ -472,11 +531,117 @@ def execute_grid(db: Session, region_code: str) -> tuple[list, list]:
     return data, anomalies
 
 
+def execute_grid_caiso(db: Session, region_code: str) -> tuple[list, list]:
+    """
+    Execute GRID command for California (CAISO).
+    
+    Fetches real-time CAISO grid data including demand and renewable generation.
+    Phase 7: Multi-Region Support.
+    
+    Args:
+        db: Database session
+        region_code: Region code (US-CA or CAISO)
+        
+    Returns:
+        Tuple of (grid_data, grid_alerts)
+    """
+    from src.ingestion.grid_caiso import get_caiso_data, CAISO_RESERVE_WARNING, CAISO_RESERVE_CRITICAL
+    
+    # Fetch CAISO data
+    caiso_data = get_caiso_data()
+    
+    # Format data for UI
+    data = []
+    
+    # Build main record
+    record = {
+        "observed_at": caiso_data.get("fetched_at"),
+        "is_summary": True,
+        "region": "[US-CA]",
+        "grid_operator": "CAISO",
+        # Demand
+        "grid_demand": caiso_data.get("current_demand_mw", 0),
+        "forecasted_demand": caiso_data.get("forecasted_demand_mw", 0),
+        # Generation
+        "grid_generation": caiso_data.get("total_generation_mw", 0),
+        "grid_solar": caiso_data.get("solar_mw", 0),
+        "grid_wind": caiso_data.get("wind_mw", 0),
+        "natural_gas_mw": caiso_data.get("natural_gas_mw", 0),
+        # Renewables
+        "total_renewables_mw": caiso_data.get("total_renewables_mw", 0),
+        "renewable_percentage": caiso_data.get("renewable_percentage", 0),
+        # Status
+        "reserve_margin_pct": caiso_data.get("reserve_margin_pct", 0),
+        "grid_status": caiso_data.get("status", "UNKNOWN"),
+    }
+    data.append(record)
+    
+    # Add generation breakdown if available
+    if caiso_data.get("generation"):
+        gen = caiso_data["generation"]
+        data.append({
+            "observed_at": gen.get("timestamp"),
+            "is_generation_detail": True,
+            "solar": gen.get("solar", 0),
+            "wind": gen.get("wind", 0),
+            "natural_gas": gen.get("natural_gas", 0),
+            "large_hydro": gen.get("large_hydro", 0),
+            "nuclear": gen.get("nuclear", 0),
+            "imports": gen.get("imports", 0),
+            "batteries": gen.get("batteries", 0),
+            "geothermal": gen.get("geothermal", 0),
+        })
+    
+    # Add renewables trend for charts if available
+    if caiso_data.get("renewables_trend"):
+        trend = caiso_data["renewables_trend"]
+        data.append({
+            "is_trend_data": True,
+            "solar_trend": trend.get("solar", []),
+            "wind_trend": trend.get("wind", []),
+            "timestamps": trend.get("timestamps", []),
+        })
+    
+    # Generate alerts based on CAISO status
+    alerts = []
+    reserve_margin = caiso_data.get("reserve_margin_pct", 100)
+    status = caiso_data.get("status", "NORMAL")
+    
+    if status == "CRITICAL" or reserve_margin < CAISO_RESERVE_CRITICAL * 100:
+        alerts.append({
+            "anomaly_id": None,
+            "indicator": "CAISO_MARGIN",
+            "region": "[US-CA]",
+            "severity": 1.0,
+            "z_score": None,
+            "baseline": CAISO_RESERVE_WARNING * 100,
+            "observed": reserve_margin,
+            "detected_at": datetime.now(timezone.utc).isoformat(),
+            "type": "CAISO_MARGIN_CRITICAL",
+            "message": f"[US-CA] CAISO MARGIN CRITICAL: {reserve_margin:.1f}%",
+        })
+    elif status == "WARNING" or reserve_margin < CAISO_RESERVE_WARNING * 100:
+        alerts.append({
+            "anomaly_id": None,
+            "indicator": "CAISO_MARGIN",
+            "region": "[US-CA]",
+            "severity": 0.7,
+            "z_score": None,
+            "baseline": CAISO_RESERVE_WARNING * 100,
+            "observed": reserve_margin,
+            "detected_at": datetime.now(timezone.utc).isoformat(),
+            "type": "CAISO_MARGIN_TIGHT",
+            "message": f"[US-CA] CAISO MARGIN TIGHT: {reserve_margin:.1f}%",
+        })
+    
+    return data, alerts
+
+
 def execute_flow(db: Session, region_code: str) -> tuple[list, list]:
     """Execute FLOW command - port/logistics data."""
     from geoalchemy2.shape import to_shape
     
-    # Map region codes to port codes
+    # Map region codes to port codes (expanded for California)
     port_map = {
         "HOU": ["HOU"],
         "HOUSTON": ["HOU"],
@@ -660,11 +825,11 @@ def execute_fin(db: Session, region_code: str) -> tuple[list, list]:
     """
     Execute FIN command - financial market correlation view.
     
-    Fetches Texas proxy watchlist data and correlates with physical alerts.
+    Fetches region proxy watchlist data and correlates with physical alerts.
     
     Args:
         db: Database session
-        region_code: Region code (US-TX for Texas proxy watchlist)
+        region_code: Region code (US-TX, US-CA)
         
     Returns:
         Tuple of (market_data, market_alerts)
@@ -673,14 +838,18 @@ def execute_fin(db: Session, region_code: str) -> tuple[list, list]:
         fetch_watchlist_quotes,
         detect_significant_moves,
         fetch_all_watchlist_history,
-        TEXAS_PROXY_WATCHLIST,
+        get_watchlist_for_region,
     )
     
-    # Fetch current quotes
-    quotes = fetch_watchlist_quotes()
+    # Get canonical region
+    canonical_region = get_canonical_region(region_code)
+    region_watchlist = get_watchlist_for_region(canonical_region)
+    
+    # Fetch current quotes for region
+    quotes = fetch_watchlist_quotes(region=canonical_region)
     
     # Fetch historical data for sparklines
-    histories = fetch_all_watchlist_history(period="5d")
+    histories = fetch_all_watchlist_history(period="5d", region=canonical_region)
     
     # Detect significant moves
     significant_moves = detect_significant_moves(quotes)
@@ -725,9 +894,10 @@ def execute_fin(db: Session, region_code: str) -> tuple[list, list]:
             quote_dict["sparkline"] = history.prices[-24:]  # Last 24 data points
             quote_dict["sparkline_dates"] = history.dates[-24:]
         
-        # Add Texas exposure info
-        watchlist_info = TEXAS_PROXY_WATCHLIST.get(quote.symbol, {})
-        quote_dict["texas_exposure"] = watchlist_info.get("exposure")
+        # Add region exposure info
+        watchlist_info = region_watchlist.get(quote.symbol, {})
+        quote_dict["region"] = canonical_region
+        quote_dict["region_exposure"] = watchlist_info.get("exposure")
         quote_dict["physical_link"] = watchlist_info.get("physical_link")
         quote_dict["sensitivity"] = watchlist_info.get("sensitivity")
         
@@ -780,20 +950,23 @@ def execute_news(db: Session, region_code: str) -> tuple[list, list]:
     """
     Execute NEWS command - news headlines with sentiment analysis.
     
-    Fetches RSS feeds for Texas Node keywords and scores sentiment
+    Fetches RSS feeds for region-specific keywords and scores sentiment
     using NLTK VADER. Part of Phase 4: Unstructured Data Layer.
     
     Args:
         db: Database session
-        region_code: Region code (used to filter relevant categories)
+        region_code: Region code (US-TX, US-CA)
         
     Returns:
         Tuple of (headlines_data, critical_headlines)
     """
-    from src.ingestion.news import get_news_summary, TEXAS_NODE_QUERIES
+    from src.ingestion.news import get_news_summary, REGION_QUERIES
     
-    # Fetch and score news
-    news_data = get_news_summary()
+    # Get canonical region
+    canonical_region = get_canonical_region(region_code)
+    
+    # Fetch and score news for region
+    news_data = get_news_summary(region=canonical_region)
     
     headlines = news_data["headlines"]
     summaries = news_data["summaries"]
@@ -810,6 +983,7 @@ def execute_news(db: Session, region_code: str) -> tuple[list, list]:
             "published_at": h.published_at.isoformat() if h.published_at else None,
             "category": h.query_category,
             "query_term": h.query_term,
+            "region": canonical_region,
             "sentiment_score": h.compound_score,
             "sentiment_label": h.sentiment_label,
             "positive_score": h.positive_score,
@@ -855,12 +1029,12 @@ def execute_wx(db: Session, region_code: str) -> tuple[list, list]:
     """
     Execute WX command - weather forecasts for predictive analysis.
     
-    Fetches 7-day weather forecasts from NWS API for key Texas locations.
+    Fetches 7-day weather forecasts from NWS API for key region locations.
     Part of Phase 5: The Predictive Layer.
     
     Args:
         db: Database session
-        region_code: Region code (used to select forecast locations)
+        region_code: Region code (US-TX, US-CA)
         
     Returns:
         Tuple of (forecast_data, predictive_alerts)
@@ -868,12 +1042,16 @@ def execute_wx(db: Session, region_code: str) -> tuple[list, list]:
     from src.ingestion.weather import (
         get_weather_summary,
         get_predictive_alerts,
-        TEXAS_FORECAST_LOCATIONS,
+        REGION_FORECAST_LOCATIONS,
         TEMPERATURE_THRESHOLDS,
     )
     
-    # Fetch weather summary
-    weather_data = get_weather_summary()
+    # Get canonical region
+    canonical_region = get_canonical_region(region_code)
+    region_locations = REGION_FORECAST_LOCATIONS.get(canonical_region, {})
+    
+    # Fetch weather summary for region
+    weather_data = get_weather_summary(region=canonical_region)
     
     forecasts = weather_data.get("forecasts", {})
     alerts = weather_data.get("alerts", [])
@@ -884,7 +1062,7 @@ def execute_wx(db: Session, region_code: str) -> tuple[list, list]:
     data = []
     
     for loc_key, forecast in forecasts.items():
-        loc_info = TEXAS_FORECAST_LOCATIONS.get(loc_key, {})
+        loc_info = region_locations.get(loc_key, {})
         loc_danger = danger.get("locations", {}).get(loc_key, {})
         
         # Build forecast record

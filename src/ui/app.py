@@ -25,8 +25,18 @@ API_URL = os.getenv("API_URL", "http://localhost:8000")
 MAPBOX_TOKEN = os.getenv("MAPBOX_ACCESS_TOKEN", "")
 MAPBOX_STYLE = os.getenv("MAPBOX_STYLE", "mapbox://styles/mapbox/dark-v11")
 
-# Texas center coordinates
+# Region center coordinates
 TEXAS_CENTER = {"latitude": 31.0, "longitude": -100.0}
+CALIFORNIA_CENTER = {"latitude": 36.7783, "longitude": -119.4179}
+
+REGION_CENTERS = {
+    "US-TX": TEXAS_CENTER,
+    "US-CA": CALIFORNIA_CENTER,
+    "ERCOT": TEXAS_CENTER,
+    "CAISO": CALIFORNIA_CENTER,
+}
+
+SUPPORTED_REGIONS = ["US-TX", "US-CA"]
 
 # Terminal color palette
 COLORS = {
@@ -216,6 +226,8 @@ if "current_function" not in st.session_state:
     st.session_state.current_function = None
 if "last_command" not in st.session_state:
     st.session_state.last_command = ""
+if "current_region" not in st.session_state:
+    st.session_state.current_region = "US-TX"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -384,10 +396,13 @@ def create_map(data: Optional[list[dict]], anomaly_ids: Optional[set] = None) ->
                     )
                     layers.append(column_layer)
 
-    # Create deck
+    # Create deck - center on selected region
+    region_center = REGION_CENTERS.get(
+        st.session_state.current_region, TEXAS_CENTER
+    )
     view_state = pdk.ViewState(
-        latitude=TEXAS_CENTER["latitude"],
-        longitude=TEXAS_CENTER["longitude"],
+        latitude=region_center["latitude"],
+        longitude=region_center["longitude"],
         zoom=5.5,
         pitch=45,
         bearing=0,
@@ -426,46 +441,78 @@ def create_map(data: Optional[list[dict]], anomaly_ids: Optional[set] = None) ->
 
 
 def render_header():
-    """Render terminal header."""
+    """Render terminal header with region selector."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     api_status = "●" if check_api_health() else "○"
+    
+    # Region display names
+    region_labels = {
+        "US-TX": "TEXAS (ERCOT)",
+        "US-CA": "CALIFORNIA (CAISO)",
+    }
+    current_region_label = region_labels.get(
+        st.session_state.current_region, st.session_state.current_region
+    )
 
     st.markdown(
         f"""
         <div class="terminal-header">
             <div>
                 <span style="color: #00FF00; font-weight: bold;">PWST</span>
-                <span style="color: #6E7681;">v0.1.0</span>
+                <span style="color: #6E7681;">v1.1.0</span>
                 <span style="margin-left: 20px;">
                     {st.session_state.last_command or "Ready"}
                 </span>
             </div>
             <div>
-                <span style="color: {'#00FF00' if api_status == '●' else '#FF0000'};">{api_status}</span>
+                <span style="color: #58A6FF; font-weight: bold;">[{current_region_label}]</span>
+                <span style="margin-left: 10px; color: {'#00FF00' if api_status == '●' else '#FF0000'};">{api_status}</span>
                 <span style="margin-left: 10px; color: #6E7681;">{now}</span>
             </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    
+    # Region selector row
+    col1, col2, col3 = st.columns([1, 1, 4])
+    with col1:
+        if st.button("🔵 TEXAS", key="btn_tx", use_container_width=True):
+            st.session_state.current_region = "US-TX"
+            st.session_state.current_data = None
+            st.session_state.current_anomalies = []
+            st.session_state.current_function = None
+            st.rerun()
+    with col2:
+        if st.button("🟠 CALIFORNIA", key="btn_ca", use_container_width=True):
+            st.session_state.current_region = "US-CA"
+            st.session_state.current_data = None
+            st.session_state.current_anomalies = []
+            st.session_state.current_function = None
+            st.rerun()
 
 
 def render_data_panel(data: Optional[list[dict]], function_code: Optional[str]):
     """Render the data panel."""
     if not data:
+        # Show region-appropriate examples
+        region = st.session_state.current_region
+        grid_code = "ERCOT" if region == "US-TX" else "CAISO"
+        
         st.markdown(
-            """
+            f"""
             <div class="data-panel">
                 <h3>▓ NO DATA LOADED</h3>
                 <p style="color: #6E7681;">Enter a command to load data</p>
+                <p style="color: #58A6FF; margin-top: 10px;">Region: {region}</p>
                 <p style="color: #6E7681; margin-top: 10px;">Examples:</p>
-                <p style="color: #00FF00;">WATR US-TX &lt;GO&gt;</p>
-                <p style="color: #00FF00;">GRID ERCOT &lt;GO&gt;</p>
-                <p style="color: #00FF00;">FIN US-TX &lt;GO&gt;</p>
-                <p style="color: #00FF00;">NEWS US-TX &lt;GO&gt;</p>
-                <p style="color: #00FF00;">WX US-TX &lt;GO&gt;</p>
-                <p style="color: #00FF00;">MACRO US-TX &lt;GO&gt;</p>
-                <p style="color: #00FF00;">RISK US-TX &lt;GO&gt;</p>
+                <p style="color: #00FF00;">WATR {region} &lt;GO&gt;</p>
+                <p style="color: #00FF00;">GRID {grid_code} &lt;GO&gt;</p>
+                <p style="color: #00FF00;">FIN {region} &lt;GO&gt;</p>
+                <p style="color: #00FF00;">NEWS {region} &lt;GO&gt;</p>
+                <p style="color: #00FF00;">WX {region} &lt;GO&gt;</p>
+                <p style="color: #00FF00;">MACRO {region} &lt;GO&gt;</p>
+                <p style="color: #00FF00;">RISK {region} &lt;GO&gt;</p>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1828,21 +1875,26 @@ def main():
             | Command | Description |
             |---------|-------------|
             | `WATR [region] <GO>` | Groundwater levels |
-            | `GRID [region] <GO>` | Power grid status |
+            | `GRID [region] <GO>` | Power grid status (ERCOT/CAISO) |
             | `FLOW [port] <GO>` | Port/logistics data |
-            | `FIN [region] <GO>` | Financial correlation view (Phase 3) |
-            | `NEWS [region] <GO>` | News sentiment analysis (Phase 4) |
-            | `WX [region] <GO>` | Weather forecasts & predictive analysis (Phase 5) |
-            | `MACRO [region] <GO>` | Commodity baseline - Henry Hub gas prices (Phase 6) |
+            | `FIN [region] <GO>` | Financial correlation view |
+            | `NEWS [region] <GO>` | News sentiment analysis |
+            | `WX [region] <GO>` | Weather forecasts & predictive analysis |
+            | `MACRO [region] <GO>` | Commodity baseline - Henry Hub gas prices |
             | `RISK [region] <GO>` | Risk dashboard |
             
-            **Regions:** `US-TX` (Texas), `ERCOT` (Texas Grid), `HOU` (Port of Houston)
+            **Regions:**
+            - `US-TX` / `ERCOT` - Texas (ERCOT grid)
+            - `US-CA` / `CAISO` - California (CAISO grid)
+            - `HOU` - Port of Houston
             
-            **Watchlist:** `VST` (Vistra), `NRG` (NRG Energy), `TXN` (Texas Instruments)
+            **Texas Watchlist:** `VST` (Vistra), `NRG` (NRG Energy), `TXN` (TI)
+            
+            **California Watchlist:** `PCG` (PG&E), `EIX` (Edison Intl)
             
             **News Categories:** GRID, WATER, LOGISTICS, EQUITY
             
-            **Weather Locations:** DALLAS, HOUSTON (ERCOT load center, Port/Logistics)
+            **TX Weather:** DALLAS, HOUSTON | **CA Weather:** LOS_ANGELES, SAN_FRANCISCO
             
             **Danger Zones:** >98°F (heat risk), <25°F (freeze risk)
             

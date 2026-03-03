@@ -47,6 +47,41 @@ TEXAS_NODE_QUERIES = {
     ],
 }
 
+# California Node RSS Query Keywords (Phase 7)
+CALIFORNIA_NODE_QUERIES = {
+    "GRID": [
+        "CAISO grid",
+        "California power grid",
+        "California electricity",
+        "California blackout",
+        "California rolling blackouts",
+    ],
+    "WATER": [
+        "California drought",
+        "California water shortage",
+        "California reservoir",
+        "Central Valley water",
+    ],
+    "LOGISTICS": [
+        "Port of Los Angeles",
+        "Port of Long Beach",
+        "California shipping",
+    ],
+    "EQUITY": [
+        "PG&E",
+        "Edison International",
+        "Southern California Edison",
+    ],
+}
+
+# Region to query mapping
+REGION_QUERIES = {
+    "US-TX": TEXAS_NODE_QUERIES,
+    "US-CA": CALIFORNIA_NODE_QUERIES,
+    "ERCOT": TEXAS_NODE_QUERIES,
+    "CAISO": CALIFORNIA_NODE_QUERIES,
+}
+
 # Flatten for full fetch
 ALL_QUERIES = [q for queries in TEXAS_NODE_QUERIES.values() for q in queries]
 
@@ -245,19 +280,26 @@ def fetch_rss_feed(query: str, category: str, max_items: int = 10) -> list[NewsH
         return []
 
 
-def fetch_all_news(max_per_query: int = 5) -> list[NewsHeadline]:
+def fetch_all_news(
+    max_per_query: int = 5,
+    region: str = "US-TX"
+) -> list[NewsHeadline]:
     """
-    Fetch news for all Texas Node queries.
+    Fetch news for all region node queries.
     
     Args:
         max_per_query: Max headlines per query term
+        region: Region code (US-TX, US-CA)
         
     Returns:
         List of all NewsHeadline objects, sorted by published date
     """
     all_headlines = []
     
-    for category, queries in TEXAS_NODE_QUERIES.items():
+    # Get queries for the specified region
+    node_queries = REGION_QUERIES.get(region.upper(), TEXAS_NODE_QUERIES)
+    
+    for category, queries in node_queries.items():
         for query in queries:
             headlines = fetch_rss_feed(query, category, max_per_query)
             all_headlines.extend(headlines)
@@ -352,17 +394,22 @@ def get_category_summary(headlines: list[NewsHeadline], category: str) -> NewsSu
     )
 
 
-def get_news_summary() -> dict:
+def get_news_summary(region: str = "US-TX") -> dict:
     """
     Fetch all news and return summary with headlines.
+    
+    Args:
+        region: Region code (US-TX, US-CA)
     
     Returns:
         Dict with headlines list and category summaries
     """
-    headlines = fetch_all_news()
+    headlines = fetch_all_news(region=region)
+    
+    node_queries = REGION_QUERIES.get(region.upper(), TEXAS_NODE_QUERIES)
     
     summaries = {}
-    for category in TEXAS_NODE_QUERIES.keys():
+    for category in node_queries.keys():
         summaries[category] = get_category_summary(headlines, category)
     
     # Overall sentiment

@@ -101,12 +101,16 @@ class Settings(BaseSettings):
     streamlit_port: int = Field(default=8501, description="Streamlit server port")
 
     # ─────────────────────────────────────────────────────────────
-    # MVP Region Configuration (Texas)
+    # Multi-Region Configuration (Phase 7)
     # ─────────────────────────────────────────────────────────────
     default_region: str = Field(default="US-TX", description="Default region code")
-    default_grid_zone: str = Field(default="ERCOT", description="Default grid zone")
+    supported_regions: list[str] = Field(
+        default=["US-TX", "US-CA"],
+        description="List of supported region codes"
+    )
 
-    # Texas bounding box
+    # Texas Configuration
+    default_grid_zone: str = Field(default="ERCOT", description="Default grid zone")
     texas_bbox_west: float = Field(default=-106.65, description="Texas west boundary")
     texas_bbox_east: float = Field(default=-93.51, description="Texas east boundary")
     texas_bbox_south: float = Field(default=25.84, description="Texas south boundary")
@@ -121,6 +125,23 @@ class Settings(BaseSettings):
             self.texas_bbox_south,
             self.texas_bbox_east,
             self.texas_bbox_north,
+        )
+
+    # California Configuration
+    california_bbox_west: float = Field(default=-124.48, description="California west boundary")
+    california_bbox_east: float = Field(default=-114.13, description="California east boundary")
+    california_bbox_south: float = Field(default=32.53, description="California south boundary")
+    california_bbox_north: float = Field(default=42.01, description="California north boundary")
+
+    @computed_field
+    @property
+    def california_bbox(self) -> tuple[float, float, float, float]:
+        """Return California bounding box as (west, south, east, north)."""
+        return (
+            self.california_bbox_west,
+            self.california_bbox_south,
+            self.california_bbox_east,
+            self.california_bbox_north,
         )
 
     # ─────────────────────────────────────────────────────────────

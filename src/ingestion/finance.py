@@ -50,6 +50,32 @@ TEXAS_PROXY_WATCHLIST = {
     },
 }
 
+# California Proxy Watchlist - equities with physical California exposure (Phase 7)
+CALIFORNIA_PROXY_WATCHLIST = {
+    "PCG": {
+        "name": "PG&E Corporation",
+        "sector": "Utilities",
+        "exposure": "CAISO power distribution, Northern California",
+        "physical_link": "GRID",
+        "sensitivity": "high",
+    },
+    "EIX": {
+        "name": "Edison International",
+        "sector": "Utilities",
+        "exposure": "Southern California Edison, CAISO grid",
+        "physical_link": "GRID",
+        "sensitivity": "high",
+    },
+}
+
+# Region to watchlist mapping
+REGION_WATCHLISTS = {
+    "US-TX": TEXAS_PROXY_WATCHLIST,
+    "US-CA": CALIFORNIA_PROXY_WATCHLIST,
+    "ERCOT": TEXAS_PROXY_WATCHLIST,
+    "CAISO": CALIFORNIA_PROXY_WATCHLIST,
+}
+
 # Movement thresholds for market reaction detection
 MARKET_THRESHOLDS = {
     "minor_move": 1.0,      # 1% daily move
@@ -114,20 +140,39 @@ class StockHistory:
 # Data Fetching Functions
 # ─────────────────────────────────────────────────────────────
 
-def fetch_watchlist_quotes(symbols: Optional[list[str]] = None) -> list[StockQuote]:
+def get_watchlist_for_region(region: str = "US-TX") -> dict:
     """
-    Fetch current quotes for Texas proxy watchlist.
+    Get the appropriate watchlist for a region.
     
     Args:
-        symbols: Optional list of symbols. Defaults to full watchlist.
+        region: Region code (US-TX, US-CA, ERCOT, CAISO)
+        
+    Returns:
+        Watchlist dict for that region
+    """
+    return REGION_WATCHLISTS.get(region.upper(), TEXAS_PROXY_WATCHLIST)
+
+
+def fetch_watchlist_quotes(
+    symbols: Optional[list[str]] = None,
+    region: str = "US-TX"
+) -> list[StockQuote]:
+    """
+    Fetch current quotes for region proxy watchlist.
+    
+    Args:
+        symbols: Optional list of symbols. Defaults to full watchlist for region.
+        region: Region code (US-TX, US-CA). Defaults to Texas.
         
     Returns:
         List of StockQuote objects with current market data.
     """
     import yfinance as yf
     
+    watchlist = get_watchlist_for_region(region)
+    
     if symbols is None:
-        symbols = list(TEXAS_PROXY_WATCHLIST.keys())
+        symbols = list(watchlist.keys())
     
     quotes = []
     
@@ -150,7 +195,7 @@ def fetch_watchlist_quotes(symbols: Optional[list[str]] = None) -> list[StockQuo
                 change_pct = (change / prev_close * 100) if prev_close else 0
                 
                 # Get watchlist metadata
-                watchlist_info = TEXAS_PROXY_WATCHLIST.get(symbol, {})
+                watchlist_info = watchlist.get(symbol, {})
                 
                 quote = StockQuote(
                     symbol=symbol,
@@ -233,19 +278,24 @@ def fetch_stock_history(
         return None
 
 
-def fetch_all_watchlist_history(period: str = "5d") -> dict[str, StockHistory]:
+def fetch_all_watchlist_history(
+    period: str = "5d",
+    region: str = "US-TX"
+) -> dict[str, StockHistory]:
     """
     Fetch historical data for all watchlist symbols.
     
     Args:
         period: Time period for history
+        region: Region code (US-TX, US-CA)
         
     Returns:
         Dict mapping symbol to StockHistory
     """
     import yfinance as yf
     
-    symbols = list(TEXAS_PROXY_WATCHLIST.keys())
+    watchlist = get_watchlist_for_region(region)
+    symbols = list(watchlist.keys())
     histories = {}
     
     try:

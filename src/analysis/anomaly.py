@@ -333,6 +333,7 @@ def get_recent_anomalies(
     hours: int = 24,
     indicator_code: Optional[str] = None,
     min_severity: float = 0.0,
+    region_code: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """
     Get recent anomalies for display.
@@ -341,17 +342,21 @@ def get_recent_anomalies(
         hours: Hours of history to retrieve
         indicator_code: Optional filter by indicator
         min_severity: Minimum severity threshold
+        region_code: Optional filter by region (US-TX, US-CA)
         
     Returns:
-        List of anomaly records with related data
+        List of anomaly records with related data, tagged with region
     """
+    from src.db.models import Region
+    
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
 
     with get_db_context() as db:
         query = (
-            db.query(Anomaly, Indicator, Station)
+            db.query(Anomaly, Indicator, Station, Region)
             .join(Indicator, Anomaly.indicator_id == Indicator.indicator_id)
             .outerjoin(Station, Anomaly.station_id == Station.station_id)
+            .outerjoin(Region, Anomaly.region_id == Region.region_id)
             .filter(Anomaly.detected_at >= cutoff)
             .filter(Anomaly.severity >= min_severity)
             .order_by(Anomaly.detected_at.desc())
@@ -359,11 +364,17 @@ def get_recent_anomalies(
 
         if indicator_code:
             query = query.filter(Indicator.code == indicator_code)
+        
+        if region_code:
+            query = query.filter(Region.code == region_code.upper())
 
         results = query.limit(100).all()
 
         anomalies = []
-        for anomaly, indicator, station in results:
+        for anomaly, indicator, station, region in results:
+            # Determine region tag for display
+            region_tag = f"[{region.code}]" if region else "[UNKNOWN]"
+            
             anomalies.append(
                 {
                     "anomaly_id": anomaly.anomaly_id,
@@ -371,6 +382,8 @@ def get_recent_anomalies(
                     "indicator_name": indicator.name,
                     "station_name": station.name if station else None,
                     "station_id": station.external_id if station else None,
+                    "region_code": region.code if region else None,
+                    "region_tag": region_tag,
                     "detected_at": anomaly.detected_at.isoformat(),
                     "anomaly_type": anomaly.anomaly_type,
                     "severity": anomaly.severity,
@@ -378,6 +391,8 @@ def get_recent_anomalies(
                     "baseline_value": anomaly.baseline_value,
                     "observed_value": anomaly.observed_value,
                     "is_acknowledged": anomaly.is_acknowledged,
+                    # Formatted message with region tag
+                    "display_message": f"{region_tag} {indicator.code}: {anomaly.anomaly_type}",
                 }
             )
 

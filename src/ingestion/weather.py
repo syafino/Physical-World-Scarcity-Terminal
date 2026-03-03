@@ -58,6 +58,53 @@ TEXAS_FORECAST_LOCATIONS = {
     },
 }
 
+# California key coordinates for forecasting (Phase 7)
+CALIFORNIA_FORECAST_LOCATIONS = {
+    "LOS_ANGELES": {
+        "name": "Los Angeles",
+        "lat": 34.0522,
+        "lon": -118.2437,
+        "purpose": "CAISO load center, population center",
+        "grid_relevance": "GRID",
+    },
+    "SAN_FRANCISCO": {
+        "name": "San Francisco",
+        "lat": 37.7749,
+        "lon": -122.4194,
+        "purpose": "Northern CA load center",
+        "grid_relevance": "GRID",
+    },
+    "SAN_DIEGO": {
+        "name": "San Diego",
+        "lat": 32.7157,
+        "lon": -117.1611,
+        "purpose": "Southern grid node",
+        "grid_relevance": "GRID",
+    },
+    "SACRAMENTO": {
+        "name": "Sacramento",
+        "lat": 38.5816,
+        "lon": -121.4944,
+        "purpose": "State capital, Central Valley",
+        "grid_relevance": "WATER",
+    },
+    "FRESNO": {
+        "name": "Fresno",
+        "lat": 36.7378,
+        "lon": -119.7871,
+        "purpose": "Central Valley agriculture",
+        "grid_relevance": "WATER",
+    },
+}
+
+# Region to forecast locations mapping
+REGION_FORECAST_LOCATIONS = {
+    "US-TX": TEXAS_FORECAST_LOCATIONS,
+    "US-CA": CALIFORNIA_FORECAST_LOCATIONS,
+    "ERCOT": TEXAS_FORECAST_LOCATIONS,
+    "CAISO": CALIFORNIA_FORECAST_LOCATIONS,
+}
+
 # Temperature danger thresholds (Fahrenheit)
 TEMPERATURE_THRESHOLDS = {
     "EXTREME_HEAT": 100,      # Extreme grid strain
@@ -464,24 +511,31 @@ def fetch_alerts(state: str = "TX") -> list[WeatherAlert]:
 # ─────────────────────────────────────────────────────────────
 
 
-def fetch_location_forecast(location_key: str) -> Optional[LocationForecast]:
+def fetch_location_forecast(
+    location_key: str,
+    region: str = "US-TX"
+) -> Optional[LocationForecast]:
     """
-    Fetch complete forecast for a predefined Texas location.
+    Fetch complete forecast for a predefined location.
     
     Args:
-        location_key: Key from TEXAS_FORECAST_LOCATIONS (e.g., "DALLAS")
+        location_key: Key from forecast locations (e.g., "DALLAS", "LOS_ANGELES")
+        region: Region code (US-TX, US-CA)
         
     Returns:
         LocationForecast with all data, or None on failure
     """
-    if location_key not in TEXAS_FORECAST_LOCATIONS:
-        logger.error("unknown_location", location_key=location_key)
+    # Get locations for region
+    region_locations = REGION_FORECAST_LOCATIONS.get(region.upper(), TEXAS_FORECAST_LOCATIONS)
+    
+    if location_key not in region_locations:
+        logger.error("unknown_location", location_key=location_key, region=region)
         return None
     
-    location = TEXAS_FORECAST_LOCATIONS[location_key]
+    location = region_locations[location_key]
     lat, lon = location["lat"], location["lon"]
     
-    logger.info("fetching_location_forecast", location=location_key, lat=lat, lon=lon)
+    logger.info("fetching_location_forecast", location=location_key, lat=lat, lon=lon, region=region)
     
     # Step 1: Get grid point
     grid_point = fetch_grid_point(lat, lon)
@@ -494,8 +548,9 @@ def fetch_location_forecast(location_key: str) -> Optional[LocationForecast]:
         periods = fetch_forecast(grid_point)
         hourly = fetch_hourly_forecast(grid_point)
     
-    # Fetch state-wide alerts
-    alerts = fetch_alerts("TX")
+    # Fetch state-wide alerts based on region
+    state_code = "CA" if region.upper() in ["US-CA", "CAISO"] else "TX"
+    alerts = fetch_alerts(state_code)
     
     # Compute temperature stats
     max_temp_48h = None
@@ -535,32 +590,53 @@ def fetch_location_forecast(location_key: str) -> Optional[LocationForecast]:
     return forecast
 
 
-def fetch_all_texas_forecasts() -> dict[str, LocationForecast]:
+def fetch_all_region_forecasts(region: str = "US-TX") -> dict[str, LocationForecast]:
     """
-    Fetch forecasts for all key Texas locations.
+    Fetch forecasts for key locations in a region.
+    
+    Args:
+        region: Region code (US-TX, US-CA)
     
     Returns:
         Dict mapping location key to LocationForecast
     """
     forecasts = {}
     
-    # Only fetch Dallas and Houston for MVP (ERCOT load center + Port)
-    for location_key in ["DALLAS", "HOUSTON"]:
-        forecast = fetch_location_forecast(location_key)
+    # Define priority locations per region (load centers)
+    priority_locations = {
+        "US-TX": ["DALLAS", "HOUSTON"],
+        "US-CA": ["LOS_ANGELES", "SAN_FRANCISCO"],
+        "ERCOT": ["DALLAS", "HOUSTON"],
+        "CAISO": ["LOS_ANGELES", "SAN_FRANCISCO"],
+    }
+    
+    locations = priority_locations.get(region.upper(), ["DALLAS", "HOUSTON"])
+    
+    for location_key in locations:
+        forecast = fetch_location_forecast(location_key, region=region)
         if forecast:
             forecasts[location_key] = forecast
     
     return forecasts
 
 
-def get_weather_summary() -> dict[str, Any]:
+# Backwards compatibility alias
+def fetch_all_texas_forecasts() -> dict[str, LocationForecast]:
+    """Fetch forecasts for Texas locations (backwards compatible)."""
+    return fetch_all_region_forecasts("US-TX")
+
+
+def get_weather_summary(region: str = "US-TX") -> dict[str, Any]:
     """
-    Get aggregated weather summary for Texas.
+    Get aggregated weather summary for a region.
+    
+    Args:
+        region: Region code (US-TX, US-CA)
     
     Returns:
         Dict with forecasts, alerts, and danger assessments
     """
-    forecasts = fetch_all_texas_forecasts()
+    forecasts = fetch_all_region_forecasts(region)
     
     # Aggregate alerts
     all_alerts = []

@@ -1,8 +1,8 @@
 # PWST Technical Architecture Specification
 ## Physical World Scarcity Terminal — Source of Truth Document
-**Version:** 1.0.0-RC  
-**Last Updated:** 2026-02-28  
-**Status:** Release Candidate — All Phases Complete
+**Version:** 1.1.0  
+**Last Updated:** 2026-03-03  
+**Status:** Production — Multi-Region Architecture (Phase 7)
 
 ---
 
@@ -975,6 +975,124 @@ LOG_LEVEL=INFO
 - Lake Texoma — Dallas-area
 - Toledo Bend — East Texas
 - Amistad — Border region
+
+---
+
+---
+
+## 11. Multi-Region Architecture (Phase 7)
+
+### 11.1 Overview
+
+Phase 7 introduces horizontal scaling, extending PWST from a single-region Texas terminal to a multi-region physical scarcity monitoring system. The initial expansion adds California (US-CA) as a second node.
+
+### 11.2 Supported Regions
+
+| Region Code | Name | Grid Operator | State | Status |
+|-------------|------|---------------|-------|--------|
+| `US-TX` | Texas | ERCOT | TX | Production |
+| `US-CA` | California | CAISO | CA | Production |
+
+**Aliases:**
+- `ERCOT` → `US-TX`
+- `CAISO` → `US-CA`
+
+### 11.3 Region Routing Architecture
+
+Commands now require a region parameter:
+```
+GRID US-TX <GO>    # Texas (ERCOT) grid data
+GRID US-CA <GO>    # California (CAISO) grid data
+WATR US-CA <GO>    # California groundwater data
+FIN US-CA <GO>     # California proxy watchlist
+NEWS US-CA <GO>    # California news feed
+WX US-CA <GO>      # California weather forecasts
+```
+
+**Routing Logic:**
+- Commands parse region code after function code
+- Region-specific data sources are selected via factory pattern
+- If no region specified, defaults to `US-TX`
+
+### 11.4 California Node Configuration
+
+#### 11.4.1 CAISO Grid Data
+
+**Source:** CAISO Today's Outlook API (https://www.caiso.com/outlook/)
+
+**Endpoints:**
+- `demand.json` — Current and forecasted demand
+- `fuelsource.json` — Generation by fuel type
+- `renewables.json` — Solar/wind time series
+
+**Key Metrics:**
+| Metric | Description | Unit |
+|--------|-------------|------|
+| Current Demand | Real-time load | MW |
+| Solar Generation | Utility-scale PV | MW |
+| Wind Generation | Wind farms | MW |
+| Natural Gas | Gas-fired generation | MW |
+| Renewable % | Share of total | % |
+| Reserve Margin | Capacity headroom | % |
+
+**Alert Thresholds:**
+| Condition | Level | Alert |
+|-----------|-------|-------|
+| Reserve > 8% | NORMAL | - |
+| Reserve 5-8% | WARNING | `CAISO_MARGIN_TIGHT` |
+| Reserve < 5% | CRITICAL | `CAISO_MARGIN_CRITICAL` |
+
+#### 11.4.2 California Weather Locations
+
+| Location Key | City | Coordinates | Purpose |
+|--------------|------|-------------|----------|
+| `LOS_ANGELES` | Los Angeles | 34.05, -118.24 | CAISO load center |
+| `SAN_FRANCISCO` | San Francisco | 37.77, -122.42 | Northern CA load |
+| `SAN_DIEGO` | San Diego | 32.72, -117.16 | Southern grid |
+| `SACRAMENTO` | Sacramento | 38.58, -121.49 | Central Valley |
+| `FRESNO` | Fresno | 36.74, -119.79 | Agricultural |
+
+#### 11.4.3 California Proxy Watchlist
+
+| Symbol | Company | Exposure |
+|--------|---------|----------|
+| `PCG` | PG&E Corporation | CAISO distribution, Northern CA |
+| `EIX` | Edison International | Southern California Edison |
+
+#### 11.4.4 California News Keywords
+
+| Category | Keywords |
+|----------|----------|
+| GRID | CAISO grid, California power grid, California blackout |
+| WATER | California drought, California reservoir, Central Valley water |
+| LOGISTICS | Port of Los Angeles, Port of Long Beach |
+| EQUITY | PG&E, Edison International, Southern California Edison |
+
+### 11.5 Region-Tagged Alerts
+
+All alerts now include region tagging for multi-region visibility:
+
+```
+[US-TX] ERCOT MARGIN < 5%
+[US-CA] CAISO MARGIN TIGHT: 6.2%
+[US-CA] CAISO HIGH RENEWABLES: 65% SOLAR
+[US-TX] AQUIFER DECLINING: EDWARDS -2.1σ
+```
+
+### 11.6 UI Region Selector
+
+The Streamlit UI provides a region selector:
+- Dropdown/button toggle between US-TX and US-CA
+- Command bar auto-appends selected region
+- Map view recenters to selected region
+- All panels refresh with region-specific data
+
+### 11.7 Future Expansion
+
+Planned regions for future phases:
+- `US-AZ` — Arizona (WECC interconnect)
+- `US-FL` — Florida (hurricane/grid stress)
+- `EU-DE` — Germany (energy transition)
 
 ---
 

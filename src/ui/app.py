@@ -1005,9 +1005,10 @@ def render_news_data(data: list[dict]):
         </div>
         """
     
+    # Full-width headlines container with increased height for better readability
     st.markdown(
         f"""
-        <div style="max-height: 400px; overflow-y: auto;">
+        <div style="max-height: 600px; overflow-y: auto;">
             {headlines_html}
         </div>
         """,
@@ -1411,7 +1412,7 @@ def render_macro_data(data: list[dict]):
         )
     
     # ─────────────────────────────────────────────────────────────
-    # Price Chart
+    # Price Chart - Full width for better data density
     # ─────────────────────────────────────────────────────────────
     st.markdown("#### 30-Day Price History")
     
@@ -1428,18 +1429,18 @@ def render_macro_data(data: list[dict]):
         df["Premium Threshold"] = premium_threshold
         df["Historical Avg"] = historical_avg
         
-        # Create chart
+        # Create chart - larger height for full-width view
         st.line_chart(
             df.set_index("date")[["price", "Premium Threshold", "Historical Avg"]],
             use_container_width=True,
-            height=250,
+            height=400,
         )
         
         # Legend
         st.markdown(
             f"""
-            <div style="font-size: 10px; color: #6E7681; display: flex; gap: 20px;">
-                <span>● Price</span>
+            <div style="font-size: 11px; color: #6E7681; display: flex; gap: 24px; margin-top: 8px;">
+                <span>● <strong>Price</strong> ($/MMBtu)</span>
                 <span style="color: #FFA500;">── Premium Threshold (${premium_threshold})</span>
                 <span style="color: #58A6FF;">── Historical Avg (${historical_avg})</span>
             </div>
@@ -1746,58 +1747,76 @@ def main():
         else:
             st.error(result.get("message", "Command failed"))
 
-    # Main layout: Map (left) + Data Panel (right)
-    col_map, col_data = st.columns([2, 1])
-
-    with col_map:
-        # Get anomaly station IDs for highlighting
-        anomaly_stations = set()
-        if st.session_state.current_anomalies:
-            for a in st.session_state.current_anomalies:
-                if a.get("station_id"):
-                    anomaly_stations.add(a["station_id"])
-
-        # Render map
-        deck = create_map(st.session_state.current_data, anomaly_stations)
-        st.pydeck_chart(deck, use_container_width=True, height=500)
-
-    with col_data:
+    # Check if current view needs geospatial map (MACRO and NEWS don't)
+    skip_map_views = {"MACRO", "NEWS"}
+    current_func = st.session_state.current_function
+    
+    if current_func in skip_map_views:
+        # Full-width layout for non-geospatial views (MACRO, NEWS)
         render_data_panel(
             st.session_state.current_data,
             st.session_state.current_function,
         )
+    else:
+        # Standard layout: Map (left) + Data Panel (right)
+        col_map, col_data = st.columns([2, 1])
 
-    # Anomaly list (if any)
+        with col_map:
+            # Get anomaly station IDs for highlighting
+            anomaly_stations = set()
+            if st.session_state.current_anomalies:
+                for a in st.session_state.current_anomalies:
+                    if a.get("station_id"):
+                        anomaly_stations.add(a["station_id"])
+
+            # Render map
+            deck = create_map(st.session_state.current_data, anomaly_stations)
+            st.pydeck_chart(deck, use_container_width=True, height=500)
+
+        with col_data:
+            render_data_panel(
+                st.session_state.current_data,
+                st.session_state.current_function,
+            )
+
+    # Anomaly list (if any) - filter out uncalibrated noise (baseline=0, observed=0)
     if st.session_state.current_anomalies:
-        st.markdown("### ▓ ACTIVE ANOMALIES")
-        for anomaly in st.session_state.current_anomalies[:10]:
-            severity = anomaly.get("severity", 0)
-            badge_class = (
-                "anomaly-critical"
-                if anomaly.get("type") == "critical_deviation"
-                else "anomaly-warning"
-            )
+        # Filter out uncalibrated statistical noise
+        calibrated_anomalies = [
+            a for a in st.session_state.current_anomalies
+            if not (a.get("baseline", 0) == 0.0 and a.get("observed", 0) == 0.0)
+        ]
+        
+        if calibrated_anomalies:
+            st.markdown("### ▓ ACTIVE ANOMALIES")
+            for anomaly in calibrated_anomalies[:10]:
+                severity = anomaly.get("severity", 0)
+                badge_class = (
+                    "anomaly-critical"
+                    if anomaly.get("type") == "critical_deviation"
+                    else "anomaly-warning"
+                )
 
-            st.markdown(
-                f"""
-                <div style="
-                    background-color: #161B22;
-                    padding: 8px;
-                    margin-bottom: 4px;
-                    font-family: monospace;
-                    font-size: 11px;
-                ">
-                    <span class="anomaly-badge {badge_class}">
-                        {anomaly.get('type', 'ANOMALY')[:8].upper()}
-                    </span>
-                    z={anomaly.get('z_score', 0):.2f}σ |
-                    baseline={anomaly.get('baseline', 0):.1f} |
-                    observed={anomaly.get('observed', 0):.1f} |
-                    {anomaly.get('detected_at', '')[:16]}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: #161B22;
+                        padding: 8px;
+                        margin-bottom: 4px;
+                        font-family: monospace;
+                        font-size: 11px;
+                    ">
+                        <span class="anomaly-badge {badge_class}">
+                            {anomaly.get('type', 'ANOMALY')[:8].upper()}
+                        </span>
+                        z={anomaly.get('z_score', 0):.2f}σ |
+                        baseline={anomaly.get('baseline', 0):.1f} |
+                        observed={anomaly.get('observed', 0):.1f} |
+                        {anomaly.get('detected_at', '')[:16]}
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
     # Legacy anomaly ticker (inline)
     render_anomaly_ticker(st.session_state.current_anomalies)

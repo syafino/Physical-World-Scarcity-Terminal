@@ -477,14 +477,16 @@ def render_header():
     # Region selector row
     col1, col2, col3 = st.columns([1, 1, 4])
     with col1:
-        if st.button("🔵 TEXAS", key="btn_tx", use_container_width=True):
+        tx_label = "► US-TX" if st.session_state.current_region == "US-TX" else "  US-TX"
+        if st.button(tx_label, key="btn_tx", use_container_width=True):
             st.session_state.current_region = "US-TX"
             st.session_state.current_data = None
             st.session_state.current_anomalies = []
             st.session_state.current_function = None
             st.rerun()
     with col2:
-        if st.button("🟠 CALIFORNIA", key="btn_ca", use_container_width=True):
+        ca_label = "► US-CA" if st.session_state.current_region == "US-CA" else "  US-CA"
+        if st.button(ca_label, key="btn_ca", use_container_width=True):
             st.session_state.current_region = "US-CA"
             st.session_state.current_data = None
             st.session_state.current_anomalies = []
@@ -586,7 +588,9 @@ def render_water_data(data: list[dict]):
 
 def render_grid_data(data: list[dict]):
     """Render grid data panel."""
-    st.markdown("### ▓ ERCOT GRID STATUS")
+    # Determine grid operator from session state
+    grid_operator = "CAISO" if st.session_state.current_region == "US-CA" else "ERCOT"
+    st.markdown(f"### ▓ {grid_operator} GRID STATUS")
 
     if not data:
         st.markdown("*No grid data available*")
@@ -747,13 +751,17 @@ def render_risk_data(data: list[dict]):
 
 def render_fin_data(data: list[dict]):
     """
-    Render financial data panel with split-screen view.
+    Render financial data panel - full width layout.
     
-    Shows Physical Status (Grid/Water/Port) on left,
-    and Texas Proxy Watchlist sparkline charts on right.
+    Shows Physical Status cards in a horizontal row at top,
+    then Regional Proxy Watchlist with wide sparkline charts below.
     """
+    # Get region-specific labels
+    region = st.session_state.current_region
+    region_name = "California" if region == "US-CA" else "Texas"
+    
     st.markdown("### ▓ FINANCIAL CORRELATION VIEW")
-    st.markdown("*Texas Proxy Watchlist - Market/Physical Intersection*")
+    st.markdown(f"*{region_name} Proxy Watchlist - Market/Physical Intersection*")
     
     if not data:
         st.markdown("*No financial data available*")
@@ -762,16 +770,25 @@ def render_fin_data(data: list[dict]):
     # Extract physical status from first record (if present)
     physical_status = data[0].get("physical_status", {}) if data else {}
     
-    # Create split-screen layout
-    col_physical, col_market = st.columns([1, 2])
+    # ─────────────────────────────────────────────────────────────
+    # TOP ROW: Physical Status Cards (horizontal)
+    # ─────────────────────────────────────────────────────────────
+    st.markdown("#### Physical Status")
     
-    # ─────────────────────────────────────────────────────────────
-    # LEFT PANEL: Physical Status
-    # ─────────────────────────────────────────────────────────────
-    with col_physical:
-        st.markdown("#### Physical Status")
-        
-        # Grid status
+    # Get region-specific labels
+    grid_label = "CAISO GRID" if region == "US-CA" else "ERCOT GRID"
+    aquifer_label = "CA AQUIFERS" if region == "US-CA" else "TX AQUIFERS"
+    port_label = "PORT OF LONG BEACH" if region == "US-CA" else "PORT OF HOUSTON"
+    
+    # Exposure legend - region specific
+    if region == "US-CA":
+        exposure_text = "PCG/EIX → GRID"
+    else:
+        exposure_text = "VST/NRG → GRID | TXN → GRID+WATR"
+    
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
+    
+    with col1:
         grid_status = physical_status.get("grid", "NORMAL")
         grid_color = _get_status_color(grid_status)
         st.markdown(
@@ -779,17 +796,17 @@ def render_fin_data(data: list[dict]):
             <div style="
                 background-color: #161B22;
                 border-left: 4px solid {grid_color};
-                padding: 8px 12px;
-                margin-bottom: 8px;
+                padding: 12px;
+                height: 70px;
             ">
-                <div style="color: #58A6FF; font-size: 11px;">ERCOT GRID</div>
-                <div style="color: {grid_color}; font-size: 16px; font-weight: bold;">{grid_status}</div>
+                <div style="color: #58A6FF; font-size: 11px;">{grid_label}</div>
+                <div style="color: {grid_color}; font-size: 20px; font-weight: bold;">{grid_status}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        
-        # Water status
+    
+    with col2:
         water_status = physical_status.get("water", "NORMAL")
         water_color = _get_status_color(water_status)
         st.markdown(
@@ -797,17 +814,17 @@ def render_fin_data(data: list[dict]):
             <div style="
                 background-color: #161B22;
                 border-left: 4px solid {water_color};
-                padding: 8px 12px;
-                margin-bottom: 8px;
+                padding: 12px;
+                height: 70px;
             ">
-                <div style="color: #58A6FF; font-size: 11px;">TEXAS AQUIFERS</div>
-                <div style="color: {water_color}; font-size: 16px; font-weight: bold;">{water_status}</div>
+                <div style="color: #58A6FF; font-size: 11px;">{aquifer_label}</div>
+                <div style="color: {water_color}; font-size: 20px; font-weight: bold;">{water_status}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        
-        # Port status
+    
+    with col3:
         port_status = physical_status.get("port", "NORMAL")
         port_color = _get_status_color(port_status)
         st.markdown(
@@ -815,80 +832,128 @@ def render_fin_data(data: list[dict]):
             <div style="
                 background-color: #161B22;
                 border-left: 4px solid {port_color};
-                padding: 8px 12px;
-                margin-bottom: 8px;
+                padding: 12px;
+                height: 70px;
             ">
-                <div style="color: #58A6FF; font-size: 11px;">PORT OF HOUSTON</div>
-                <div style="color: {port_color}; font-size: 16px; font-weight: bold;">{port_status}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        
-        # Exposure legend
-        st.markdown(
-            """
-            <div style="margin-top: 16px; font-size: 10px; color: #6E7681;">
-                <strong>Symbol Exposure:</strong><br>
-                VST/NRG → GRID<br>
-                TXN → GRID + WATR
+                <div style="color: #58A6FF; font-size: 11px;">{port_label}</div>
+                <div style="color: {port_color}; font-size: 20px; font-weight: bold;">{port_status}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
     
+    with col4:
+        st.markdown(
+            f"""
+            <div style="
+                background-color: #161B22;
+                border-left: 4px solid #58A6FF;
+                padding: 12px;
+                height: 70px;
+            ">
+                <div style="color: #58A6FF; font-size: 11px;">SYMBOL EXPOSURE</div>
+                <div style="color: #6E7681; font-size: 12px; margin-top: 4px;">{exposure_text}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    
     # ─────────────────────────────────────────────────────────────
-    # RIGHT PANEL: Market Data + Sparklines
+    # MAIN SECTION: Proxy Watchlist with Wide Sparklines
     # ─────────────────────────────────────────────────────────────
-    with col_market:
-        st.markdown("#### Texas Proxy Watchlist")
+    st.markdown(f"#### {region_name} Proxy Watchlist")
+    
+    for quote in data:
+        symbol = quote.get("symbol", "UNK")
+        name = quote.get("name", "Unknown")
+        price = quote.get("price", 0)
+        change_pct = quote.get("change_percent", 0)
+        sparkline = quote.get("sparkline", [])
+        physical_link = quote.get("physical_link", "")
         
-        for quote in data:
-            symbol = quote.get("symbol", "UNK")
-            name = quote.get("name", "Unknown")
-            price = quote.get("price", 0)
-            change_pct = quote.get("change_percent", 0)
-            sparkline = quote.get("sparkline", [])
-            physical_link = quote.get("physical_link", "")
+        # Determine color based on change direction
+        change_color = "#00FF00" if change_pct >= 0 else "#FF0000"
+        arrow = "▲" if change_pct >= 0 else "▼"
+        
+        # Use container to group each stock as a cohesive card
+        with st.container():
+            # Single card with all info inline: Symbol | Price | Sparkline
+            col_symbol, col_price, col_chart = st.columns([1, 1, 3])
             
-            # Determine color based on change direction
-            change_color = "#00FF00" if change_pct >= 0 else "#FF0000"
-            arrow = "▲" if change_pct >= 0 else "▼"
-            
-            # Create a mini-row for each stock
-            st.markdown(
-                f"""
-                <div style="
-                    background-color: #161B22;
-                    border: 1px solid #30363D;
-                    padding: 12px;
-                    margin-bottom: 8px;
-                    border-radius: 4px;
-                ">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div>
-                            <span style="color: #58A6FF; font-size: 16px; font-weight: bold;">{symbol}</span>
-                            <span style="color: #6E7681; font-size: 11px; margin-left: 8px;">{name}</span>
-                            <span style="color: #6E7681; font-size: 10px; margin-left: 8px;">({physical_link})</span>
-                        </div>
-                        <div style="text-align: right;">
-                            <div style="color: #E6EDF3; font-size: 14px;">${price:.2f}</div>
-                            <div style="color: {change_color}; font-size: 12px;">{arrow} {abs(change_pct):.2f}%</div>
-                        </div>
+            with col_symbol:
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: #161B22;
+                        border: 1px solid #30363D;
+                        border-right: none;
+                        padding: 12px 16px;
+                        height: 80px;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                    ">
+                        <div style="color: #58A6FF; font-size: 18px; font-weight: bold;">{symbol}</div>
+                        <div style="color: #6E7681; font-size: 10px;">{name}</div>
+                        <div style="color: #6E7681; font-size: 9px;">Link: {physical_link}</div>
                     </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            
-            # Render sparkline chart if available
-            if sparkline and len(sparkline) > 1:
-                sparkline_df = pd.DataFrame({"price": sparkline})
-                st.line_chart(
-                    sparkline_df,
-                    use_container_width=True,
-                    height=60,
+                    """,
+                    unsafe_allow_html=True,
                 )
+            
+            with col_price:
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: #161B22;
+                        border: 1px solid #30363D;
+                        border-left: none;
+                        border-right: none;
+                        padding: 12px 16px;
+                        height: 80px;
+                        display: flex;
+                        flex-direction: column;
+                        justify-content: center;
+                        text-align: center;
+                    ">
+                        <div style="color: #E6EDF3; font-size: 18px; font-weight: bold;">${price:.2f}</div>
+                        <div style="color: {change_color}; font-size: 14px;">{arrow} {abs(change_pct):.2f}%</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            
+            with col_chart:
+                # Render sparkline chart inside a styled container
+                if sparkline and len(sparkline) > 1:
+                    sparkline_df = pd.DataFrame({"price": sparkline})
+                    st.line_chart(
+                        sparkline_df,
+                        use_container_width=True,
+                        height=80,
+                    )
+                else:
+                    st.markdown(
+                        """
+                        <div style="
+                            background-color: #161B22;
+                            border: 1px solid #30363D;
+                            border-left: none;
+                            padding: 12px;
+                            height: 80px;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            color: #6E7681;
+                            font-size: 11px;
+                        ">
+                            No price history
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
 
 def render_news_data(data: list[dict]):
@@ -1067,7 +1132,7 @@ def render_wx_data(data: list[dict]):
     """
     Render WX command - weather forecasts with temperature danger zones.
     
-    Shows 7-day forecasts for key Texas locations with:
+    Shows 7-day forecasts for key regional locations with:
     - Temperature danger zone indicators (heat/freeze risk)
     - Grid strain predictions
     - Temperature chart with danger thresholds
@@ -1075,8 +1140,12 @@ def render_wx_data(data: list[dict]):
     
     Phase 5: The Predictive Layer
     """
+    # Get region-specific labels
+    region = st.session_state.current_region
+    region_name = "California" if region == "US-CA" else "Texas"
+    
     st.markdown("### ▓ WEATHER FORECAST & PREDICTIVE ANALYSIS")
-    st.markdown("*Texas Node Predictive Layer - Anticipating Scarcity Before It Happens*")
+    st.markdown(f"*{region_name} 7-Day Forecast - Anticipating Scarcity Before It Happens*")
     
     if not data:
         st.markdown("*No weather data available. Fetching from NWS API...*")
@@ -1321,8 +1390,12 @@ def render_macro_data(data: list[dict]):
     
     Phase 6: The Macro-Commodity Layer
     """
+    # Get region-specific labels
+    region = st.session_state.current_region
+    grid_name = "CAISO" if region == "US-CA" else "ERCOT"
+    
     st.markdown("### ▓ COMMODITY BASELINE: HENRY HUB NATURAL GAS")
-    st.markdown("*Texas Grid Power Generation Cost Indicator*")
+    st.markdown(f"*{grid_name} Grid Power Generation Cost Indicator*")
     
     if not data:
         st.markdown("*No commodity data available. Check FRED API key in .env*")
@@ -1500,13 +1573,13 @@ def render_macro_data(data: list[dict]):
     # ─────────────────────────────────────────────────────────────
     # Context Information
     # ─────────────────────────────────────────────────────────────
-    with st.expander("Henry Hub & Texas Grid Context", expanded=False):
-        texas_relevance = series_info.get("texas_relevance", "N/A")
+    with st.expander(f"Henry Hub & {grid_name} Grid Context", expanded=False):
+        grid_relevance = series_info.get("texas_relevance", "N/A")  # API field name kept for compat
         st.markdown(
             f"""
-            **Why Henry Hub Matters for Texas:**
+            **Why Henry Hub Matters for {grid_name}:**
             
-            {texas_relevance}
+            {grid_relevance}
             
             **Price Thresholds:**
             | Level | Price | Interpretation |
@@ -1795,7 +1868,7 @@ def main():
             st.error(result.get("message", "Command failed"))
 
     # Check if current view needs geospatial map (MACRO and NEWS don't)
-    skip_map_views = {"MACRO", "NEWS"}
+    skip_map_views = {"MACRO", "NEWS", "FIN"}
     current_func = st.session_state.current_function
     
     if current_func in skip_map_views:

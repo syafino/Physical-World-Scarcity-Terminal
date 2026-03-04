@@ -354,19 +354,35 @@ def parse_command(command: str) -> dict[str, Any]:
 
 def execute_watr(db: Session, region_code: str) -> tuple[list, list]:
     """Execute WATR command - groundwater data."""
+    from geoalchemy2 import functions as geofunc
+    
+    # Get region info for bounding box filtering
+    canonical_region = get_canonical_region(region_code)
+    
+    # Define regional bounding boxes (minLon, minLat, maxLon, maxLat)
+    REGION_BBOXES = {
+        "US-TX": (-106.65, 25.84, -93.51, 36.5),   # Texas
+        "US-CA": (-124.48, 32.53, -114.13, 42.01),  # California
+    }
+    bbox = REGION_BBOXES.get(canonical_region, REGION_BBOXES["US-TX"])
+    
     # Get indicator
     indicator = db.query(Indicator).filter_by(code="GW_LEVEL").first()
     if not indicator:
         return [], []
 
-    # Get recent observations
+    # Get recent observations filtered by region bounding box
     cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    
+    # Create envelope for bounding box query
+    bbox_wkt = f"POLYGON(({bbox[0]} {bbox[1]}, {bbox[2]} {bbox[1]}, {bbox[2]} {bbox[3]}, {bbox[0]} {bbox[3]}, {bbox[0]} {bbox[1]}))"
 
     observations = (
         db.query(Observation, Station)
         .join(Station, Observation.station_id == Station.station_id)
         .filter(Observation.indicator_id == indicator.indicator_id)
         .filter(Observation.observed_at >= cutoff)
+        .filter(geofunc.ST_Within(Station.location, geofunc.ST_GeomFromText(bbox_wkt, 4326)))
         .order_by(Observation.observed_at.desc())
         .limit(500)
         .all()
